@@ -48,8 +48,8 @@ To build the project, you need:
 
 From the project root, run:
 
-```powershell
-C:\Users\Kuba\.platformio\penv\Scripts\platformio.exe run
+```bash
+pio run
 ```
 
 You can also use the Build action from PlatformIO IDE.
@@ -58,8 +58,8 @@ You can also use the Build action from PlatformIO IDE.
 
 To upload the firmware to the board:
 
-```powershell
-C:\Users\Kuba\.platformio\penv\Scripts\platformio.exe run --target upload
+```bash
+pio run --target upload
 ```
 
 If upload does not start immediately, the board may need to be placed into bootloader mode first.
@@ -68,8 +68,8 @@ If upload does not start immediately, the board may need to be placed into bootl
 
 To open the serial monitor:
 
-```powershell
-C:\Users\Kuba\.platformio\penv\Scripts\platformio.exe device monitor
+```bash
+pio device monitor
 ```
 
 The current monitor speed is:
