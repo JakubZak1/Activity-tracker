@@ -1,13 +1,11 @@
 #include <Arduino.h>
-#include <Adafruit_TinyUSB.h>
+
+#include "app.h"
 
 void setup() {
-  Serial.begin(115200);
-  delay(2000);
-  Serial.println("XIAO nRF52840 Sense dziala");
+  app::setup();
 }
 
 void loop() {
-  Serial.println("tick");
-  delay(1000);
+  app::loop();
 }
