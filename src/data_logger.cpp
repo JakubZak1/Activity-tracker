@@ -24,7 +24,7 @@ FatFileSystem fatfs;
 FatFile logFile;
 uint32_t samplesSinceFlush = 0;
 uint16_t sessionIndex = 0;
-char currentLogPathBuffer[32] = {0};
+char currentLogPathBuffer[48] = {0};
 char lastErrorBuffer[48] = {0};
 
 void setError(const char* message) {
@@ -38,7 +38,30 @@ const char* normalizePath(const char* path) {
 
 bool isManagedLogFile(const char* name) {
   const char* normalized = normalizePath(name);
-  return strncmp(normalized, "log_", 4) == 0 || strcmp(normalized, "session_index.txt") == 0;
+  const char* extension = strrchr(normalized, '.');
+  return (extension && strcmp(extension, ".csv") == 0) || strcmp(normalized, "session_index.txt") == 0;
+}
+
+bool isSafeLabelChar(char ch) {
+  return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_';
+}
+
+void sanitizeLabelForPath(const char* label, char* output, size_t outputSize) {
+  size_t outIndex = 0;
+  for (size_t inIndex = 0; label && label[inIndex] != '\0' && outIndex + 1 < outputSize; ++inIndex) {
+    const char ch = label[inIndex];
+    if (isSafeLabelChar(ch)) {
+      output[outIndex++] = ch;
+    }
+  }
+
+  if (outIndex == 0 && outputSize > 1) {
+    strncpy(output, "unlabeled", outputSize - 1);
+    output[outputSize - 1] = '\0';
+    return;
+  }
+
+  output[outIndex] = '\0';
 }
 
 uint16_t readSessionIndex() {
@@ -125,7 +148,7 @@ bool begin() {
   return true;
 }
 
-bool startSession() {
+bool startSession(const char* label) {
   clearError();
 
   if (logFile.isOpen()) {
@@ -134,7 +157,9 @@ bool startSession() {
   }
 
   sessionIndex = readSessionIndex();
-  snprintf(currentLogPathBuffer, sizeof(currentLogPathBuffer), "/log_%04u.csv", sessionIndex);
+  char safeLabel[app_config::kActivityLabelBufferSize] = {0};
+  sanitizeLabelForPath(label, safeLabel, sizeof(safeLabel));
+  snprintf(currentLogPathBuffer, sizeof(currentLogPathBuffer), "/%s_%04u.csv", safeLabel, sessionIndex);
 
   if (fatfs.exists(currentLogPathBuffer) && !fatfs.remove(currentLogPathBuffer)) {
     setError("old_log_remove_failed");
@@ -188,8 +213,7 @@ bool writeSample(const IMUSample& sample, const char* label, bool mirrorToSerial
   const int written = snprintf(
       line,
       sizeof(line),
-      "%lu,%lu,%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.2f,%.2f,%.2f,%02X\n",
-      static_cast<unsigned long>(sample.sampleId),
+      "%lu,%s,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
       static_cast<unsigned long>(sample.timestampMs),
       label,
       sample.accX,
@@ -197,11 +221,7 @@ bool writeSample(const IMUSample& sample, const char* label, bool mirrorToSerial
       sample.accZ,
       sample.gyroX,
       sample.gyroY,
-      sample.gyroZ,
-      sample.rollDeg,
-      sample.pitchDeg,
-      sample.tempC,
-      sample.imuAddress);
+      sample.gyroZ);
 
   if (written <= 0 || written >= static_cast<int>(sizeof(line))) {
     setError("csv_format_failed");
@@ -236,6 +256,70 @@ bool eraseLogs() {
   stopSession();
   currentLogPathBuffer[0] = '\0';
   return removeManagedFiles();
+}
+
+bool loadSavedLabel(char* output, size_t outputSize) {
+  clearError();
+  if (!output || outputSize == 0) {
+    setError("label_buffer_invalid");
+    return false;
+  }
+
+  FatFile labelFile;
+  if (!labelFile.open(app_config::kActivityLabelPath, O_RDONLY)) {
+    setError("label_file_not_found");
+    return false;
+  }
+
+  char buffer[app_config::kActivityLabelBufferSize] = {0};
+  const int bytesRead = labelFile.read(buffer, sizeof(buffer) - 1);
+  labelFile.close();
+  if (bytesRead <= 0) {
+    setError("label_read_failed");
+    return false;
+  }
+
+  for (size_t i = 0; buffer[i] != '\0'; ++i) {
+    if (buffer[i] == '\r' || buffer[i] == '\n') {
+      buffer[i] = '\0';
+      break;
+    }
+  }
+
+  if (buffer[0] == '\0') {
+    setError("label_empty");
+    return false;
+  }
+
+  strncpy(output, buffer, outputSize - 1);
+  output[outputSize - 1] = '\0';
+  return true;
+}
+
+bool saveLabel(const char* label) {
+  clearError();
+
+  if (fatfs.exists(app_config::kActivityLabelPath) && !fatfs.remove(app_config::kActivityLabelPath)) {
+    setError("label_remove_failed");
+    return false;
+  }
+
+  FatFile labelFile;
+  if (!labelFile.open(app_config::kActivityLabelPath, O_RDWR | O_CREAT)) {
+    setError("label_open_failed");
+    return false;
+  }
+
+  char line[app_config::kActivityLabelBufferSize + 2] = {0};
+  snprintf(line, sizeof(line), "%s\n", label);
+  const size_t length = strlen(line);
+  const bool ok = labelFile.write(line, length) == length;
+  labelFile.flush();
+  labelFile.close();
+  if (!ok) {
+    setError("label_write_failed");
+  }
+  return ok;
 }
 
 void listFiles(Stream& serial) {
