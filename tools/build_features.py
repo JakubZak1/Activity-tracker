@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-rate-hz", default=50.0, type=float)
     parser.add_argument("--window-s", default=2.0, type=float)
     parser.add_argument("--overlap", default=0.5, type=float)
+    parser.add_argument("--trim-start-s", default=5.0, type=float, help="Seconds ignored at the start of each session.")
+    parser.add_argument("--trim-end-s", default=5.0, type=float, help="Seconds ignored at the end of each session.")
     parser.add_argument(
         "--min-samples",
         type=int,
@@ -36,6 +38,20 @@ def parse_args() -> argparse.Namespace:
         help="Minimum samples required per window. Default is 80 percent of the expected window sample count.",
     )
     return parser.parse_args()
+
+
+def trim_samples(samples: list[SensorSample], trim_start_s: float, trim_end_s: float) -> list[SensorSample]:
+    if not samples:
+        return []
+
+    first_ms = samples[0].timestamp_ms
+    last_ms = samples[-1].timestamp_ms
+    start_ms = first_ms + int(trim_start_s * 1000.0)
+    end_ms = last_ms - int(trim_end_s * 1000.0)
+    if start_ms >= end_ms:
+        return []
+
+    return [sample for sample in samples if start_ms <= sample.timestamp_ms <= end_ms]
 
 
 def sample_value(sample: SensorSample, axis: str) -> float:
@@ -162,10 +178,10 @@ def main() -> int:
             print(f"skip,{path.name},{'; '.join(report.issues)}")
             continue
 
-        samples = load_log(path)
+        samples = trim_samples(load_log(path), args.trim_start_s, args.trim_end_s)
         rows = build_windows(path, samples, window_ms, step_ms, min_samples, sample_period_ms)
         feature_rows.extend(rows)
-        print(f"ok,{path.name},windows,{len(rows)}")
+        print(f"ok,{path.name},windows,{len(rows)},trimmed_samples,{len(samples)}")
 
     fieldnames = feature_fieldnames()
     with args.output.open("w", newline="", encoding="utf-8") as handle:

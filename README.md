@@ -256,13 +256,26 @@ Load all local raw logs and print a quick summary:
 python tools/dataset_loader.py
 ```
 
+Plot a single session for a quick sensor sanity check:
+
+```bash
+python -m pip install matplotlib
+python tools/plot_session.py dataset/raw/own/20260425_213000_walking_0000.csv
+```
+
+Plots are saved to:
+
+```text
+dataset/results/plots/
+```
+
 Build classical ML feature rows from valid raw logs:
 
 ```bash
 python tools/build_features.py
 ```
 
-By default this uses 2 second windows with 50% overlap, matching the first baseline plan. The output goes to:
+By default this ignores the first 5 seconds and last 5 seconds of every session, then uses 2 second windows with 50% overlap. This keeps startup/shutdown handling out of the training windows. The output goes to:
 
 ```text
 dataset/processed/features.csv
@@ -271,7 +284,7 @@ dataset/processed/features.csv
 For tiny smoke-test files only, use a shorter window:
 
 ```bash
-python tools/build_features.py --window-s 0.04 --overlap 0 --min-samples 2
+python tools/build_features.py --window-s 0.04 --overlap 0 --min-samples 2 --trim-start-s 0 --trim-end-s 0
 ```
 
 ## Notes

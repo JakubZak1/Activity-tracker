@@ -116,6 +116,14 @@ def send_command(connection, command: str) -> None:
     connection.flush()
 
 
+def prepare_command_channel(connection) -> None:
+    connection.reset_input_buffer()
+    connection.write(b"\n")
+    connection.flush()
+    time.sleep(0.05)
+    connection.reset_input_buffer()
+
+
 def read_until_quiet(connection, quiet_s: float = 0.5, max_s: float = 5.0) -> list[str]:
     lines: list[str] = []
     start = time.monotonic()
@@ -343,6 +351,7 @@ def main() -> int:
                 print(f"device,{line}")
 
         if args.stop_first:
+            prepare_command_channel(connection)
             send_command(connection, "stop")
             for line in read_until_quiet(connection, quiet_s=0.2, max_s=2.0):
                 if line:
