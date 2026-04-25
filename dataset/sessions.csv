@@ -1,0 +1,5 @@
+file,label,date,subject_id,duration_s,placement,orientation,source,notes
+walking_0005.csv,walking,2026-04-25,S01,12.7,wrist,unknown,own,first downloaded real log
+20260425_220053_running_0002.csv,running,2026-04-25,S01,4.2,wrist,test,own,test
+20260425_220053_walking_0000.csv,walking,2026-04-25,S01,2.0,wrist,test,own,test
+20260425_220053_walking_0001.csv,walking,2026-04-25,S01,12.7,wrist,test,own,test

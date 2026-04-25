@@ -1,0 +1,4 @@
+device_file,size_bytes,downloaded_as,downloaded_at
+/walking_0000.csv,5772,dataset\raw\own\20260425_220053_walking_0000.csv,2026-04-25T22:00:55
+/walking_0001.csv,39016,dataset\raw\own\20260425_220053_walking_0001.csv,2026-04-25T22:00:56
+/running_0002.csv,13882,dataset\raw\own\20260425_220053_running_0002.csv,2026-04-25T22:00:56
