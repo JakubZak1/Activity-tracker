@@ -1,6 +1,6 @@
 # Activity Tracker
 
-Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. It is being built as a practical foundation for on-device activity recognition, local data logging, and later mobile visualization.
+Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. It is being built as a practical foundation for on-device activity recognition, local data logging, and mobile visualization.
 
 The current firmware can:
 - read accelerometer and gyroscope data from the onboard IMU
@@ -8,6 +8,8 @@ The current firmware can:
 - store sessions in the onboard external QSPI flash
 - expose serial commands for inspecting logs and storage usage
 - format external flash with a dedicated one-time formatter firmware
+
+The repository also contains an Android/Kotlin MVP app in `android/`. The app currently uses a mock BLE-like data source while the firmware BLE inference mode is still under development.
 
 ## Hardware
 
@@ -33,6 +35,7 @@ Formatter environment:
 
 ## Project Structure
 
+- `android/` native Android/Kotlin MVP app
 - `src/` application source files
 - `src/fatfs/` local FATFS sources used by the formatter firmware
 - `include/` public project headers
@@ -46,6 +49,64 @@ Key source modules:
 - `data_logger.cpp` external flash logging and file access
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
+
+## Android MVP App
+
+The Android app is a local, Android-only MVP for the product/demo side of the project. It is not a full smartwatch app and does not use accounts, cloud storage, or a backend.
+
+Current app features:
+- mock BLE-like device connection for UI and session development
+- live activity, confidence, battery, session duration, steps, and calories UI
+- MET-based calorie estimate using user weight
+- phone GPS preview on the map
+- foreground location service for recording sessions while the phone is locked
+- OSMDroid map with route segments colored by activity
+- grouped stop markers for sitting and lying
+- Settings and Debug screens
+- BLE contract v1 constants and text payload parsers
+
+Current limitations:
+- real BLE scan/connect is not implemented yet
+- the firmware does not yet expose the final BLE inference service
+- finished sessions are not persisted/exported yet
+
+Open the Android app in Android Studio by selecting:
+
+```text
+activity_tracker/android
+```
+
+Build and test from `android/`:
+
+```powershell
+.\gradlew.bat :app:compileDebugKotlin
+.\gradlew.bat :app:testDebugUnitTest
+```
+
+If `java` is not available in `PATH`, use Android Studio's embedded JDK, for example:
+
+```powershell
+$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+```
+
+The app documentation is in:
+
+```text
+android/README.md
+```
+
+Recommended demo flow:
+1. Install the app on an Android phone from Android Studio.
+2. Tap `Connect mock`.
+3. Open Map and grant location permission.
+4. Tap `Start session`.
+5. Walk, run, or move with the phone; the app records GPS route points only while the session is active.
+6. Lock the phone if needed; the foreground service keeps session recording alive.
+7. Tap `Stop session`.
+
+In the final system split:
+- firmware classifies activity, measures battery, tracks session duration, and later counts steps
+- Android displays activity, estimates calories, collects phone GPS, and visualizes the route
 
 ## PlatformIO Environments
 
@@ -306,7 +367,9 @@ Likely next project stages:
 2. build a PC-side training pipeline
 3. run activity classification on-device in real time
 4. store compact activity summaries instead of raw logs in product mode
-5. add BLE/mobile sync and visualization
+5. expose the BLE contract from firmware
+6. replace the Android mock data source with real BLE scan/connect
+7. persist and export Android sessions for thesis analysis
 
 ## License
 

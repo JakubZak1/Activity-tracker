@@ -20,3 +20,19 @@ dataset/results/*
 !dataset/processed/.gitkeep
 !dataset/models/.gitkeep
 !dataset/results/.gitkeep
+
+# Android
+android/.gradle/
+android/.idea/
+android/local.properties
+android/captures/
+android/**/build/
+android/**/.cxx/
+android/**/.externalNativeBuild/
+*.apk
+*.aab
+*.ap_
+*.hprof
+*.iml
+*.jks
+*.keystore
