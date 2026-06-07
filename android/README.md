@@ -3,14 +3,14 @@
 Native Android/Kotlin MVP for the Activity Tracker embedded project.
 
 The app is Android-only and works locally: no user accounts, no cloud, and no
-backend. Its first implementation uses a mock device data source, so the UI,
-GPS, map, session, and calorie logic can be developed before the nRF52840 BLE
-firmware exposes the final service.
+backend. It connects directly to the nRF52840 over BLE and also retains a mock
+data source for UI development and demonstrations without the board.
 
 ## Current Status
 
 Implemented:
 - Jetpack Compose app shell with Home, Map, Settings, and Debug screens
+- real BLE scan, GATT connection, notifications, and command writes
 - mock BLE-like device data source
 - BLE contract v1 UUID constants and text payload parsers
 - live activity, confidence, battery, session duration, steps, and calories UI
@@ -23,10 +23,13 @@ Implemented:
 - unit tests for BLE payload parsing and calorie calculation
 
 Not implemented yet:
-- real BLE scanning and GATT connection
-- real writes to the firmware command characteristic
 - persisted session history/export
+- manual selection from a list of multiple matching BLE devices
 - production-grade UI polish
+
+The firmware now exposes a first BLE prototype with real battery values,
+placeholder `unknown` activity/summary values, notifications, and the `status`
+command. The Android app can connect to this prototype directly.
 
 ## Technology Stack
 
@@ -107,20 +110,22 @@ Recommended path:
 The app requests:
 - location permission for map preview and session route recording
 - notification permission on Android 13+ for the foreground session service
-- BLE permissions for the future real BLE implementation
+- nearby-device BLE permissions for scanning and connecting
 
 ## App Behavior
 
 After opening the app:
-1. Tap `Connect mock`.
-2. Live mock activity and battery values start updating.
-3. Open Map to allow GPS and see the current location.
-4. Tap `Start session` to record a session.
-5. Lock the phone if needed; the foreground service keeps GPS recording alive.
-6. Tap `Stop session` to stop recording.
+1. Power the XIAO running the normal firmware.
+2. Tap `Scan & connect` and grant the Bluetooth permissions.
+3. The app finds the first matching `ActivityTracker` service and connects.
+4. Live activity, battery, summary, and raw debug values start updating.
+5. Open Map to allow GPS and see the current location.
+6. Tap `Start session` to record a session.
+7. Lock the phone if needed; the foreground service keeps GPS and BLE alive.
+8. Tap `Stop session` to stop recording.
 
 Live mode:
-- starts after connecting to the mock source
+- starts after connecting to the BLE or mock source
 - shows current activity, confidence, battery, and debug payloads
 - does not record a route by itself
 
@@ -205,22 +210,47 @@ unknown
 
 Unknown or unrecognized activity values are mapped to `unknown`.
 
+The current firmware implementation publishes:
+
+```text
+unknown,0,0
+voltage_mv,percent
+uptime_s,unknown,0
+```
+
+It automatically notifies activity and summary approximately once per second,
+battery approximately every 30 seconds, and immediately republishes all values
+after receiving the UTF-8 command `status`.
+
+## Real BLE Device Source
+
+Real BLE is the default data source. After tapping `Scan & connect`, the app:
+1. requests the required Android Bluetooth permissions
+2. scans for the Activity Tracker service UUID and configured device name
+3. connects with Android `BluetoothGatt`
+4. enables notifications sequentially for activity, battery, and summary
+5. writes `status` so the firmware immediately republishes all values
+6. forwards received UTF-8 payloads through `BlePayloadParser` to the existing UI
+
+The current firmware recognizes only `status`. Android also writes `start` and
+`stop` when a phone session changes, but the firmware safely ignores those
+commands until firmware session handling is implemented.
+
 ## Mock Device Source
 
-The MVP uses `MockDeviceDataSource` by default. It emits:
+Enable `Mock data source` in Settings to use the app without the board. It emits:
 - current activity at about 1 Hz
 - summary at about 1 Hz
 - battery periodically
 - raw debug events
 
-The UI depends on the `DeviceDataSource` interface, so the mock source can be
-replaced by a real BLE implementation later without rewriting screens.
+Changing the source disconnects the currently active source. Both
+implementations use the same `DeviceDataSource` interface and existing UI.
 
 ## Next Steps
 
 Suggested implementation order:
-1. add real BLE scan/connect flow
-2. subscribe to `current_activity`, `battery`, and `summary`
-3. write `start`, `stop`, and `status` to the `command` characteristic
-4. save finished sessions locally as JSON or CSV
-5. add session export for thesis analysis
+1. replace placeholder activity and summary with inference results
+2. implement firmware handling for `start` and `stop`
+3. save finished sessions locally as JSON or CSV
+4. add session export for thesis analysis

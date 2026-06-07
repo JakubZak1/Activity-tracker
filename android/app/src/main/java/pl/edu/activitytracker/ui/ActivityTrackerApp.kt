@@ -69,6 +69,7 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                 HomeScreen(
                     paddingValues = paddingValues,
                     state = state,
+                    useMockSource = settings.useMockSource,
                     onConnect = viewModel::connectDevice,
                     onDisconnect = viewModel::disconnectDevice,
                     onStartSession = viewModel::startSession,

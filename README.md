@@ -7,9 +7,10 @@ The current firmware can:
 - log labeled CSV sessions with timestamps
 - store sessions in the onboard external QSPI flash
 - expose serial commands for inspecting logs and storage usage
+- advertise a BLE GATT service and publish initial mobile telemetry
 - format external flash with a dedicated one-time formatter firmware
 
-The repository also contains an Android/Kotlin MVP app in `android/`. The app currently uses a mock BLE-like data source while the firmware BLE inference mode is still under development.
+The repository also contains an Android/Kotlin MVP app in `android/`. It can connect directly to the firmware BLE prototype and retains an optional mock source for development without the board.
 
 ## Hardware
 
@@ -28,6 +29,9 @@ Normal firmware environment:
 - stores CSV logs in external flash
 - supports serial commands such as `help`, `status`, `space`, `list`, `read`, `label`, `start`, `stop`, `stream on`, `stream off`, and `erase`
 - reports approximate LiPo battery voltage and percentage
+- advertises as `ActivityTracker` over BLE
+- publishes placeholder activity, summary, and real battery telemetry
+- accepts the BLE command `status`
 
 Formatter environment:
 - initializes and formats the external flash with a FAT filesystem
@@ -47,15 +51,87 @@ Key source modules:
 - `app.cpp` main runtime flow and command handling
 - `imu_reader.cpp` IMU initialization and sampling
 - `data_logger.cpp` external flash logging and file access
+- `ble_service.cpp` BLE GATT service, telemetry notifications, and command handling
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
+
+## Current BLE Prototype
+
+The normal firmware currently exposes the first test version of the mobile BLE contract. It is intended to verify the complete device-to-phone communication path before the activity recognition model is ready.
+
+The board advertises as:
+
+```text
+ActivityTracker
+```
+
+Service UUID:
+
+```text
+7b7d0000-8f7a-4f6a-9f4f-1d2c3b4a5000
+```
+
+Characteristics:
+
+| Name | UUID | Properties | Current payload |
+| --- | --- | --- | --- |
+| `current_activity` | `7b7d0001-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `unknown,0,0` |
+| `battery` | `7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `voltage_mv,percent` |
+| `summary` | `7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `uptime_s,unknown,0` |
+| `command` | `7b7d0004-8f7a-4f6a-9f4f-1d2c3b4a5000` | write, write without response | `status` |
+
+Automatic update frequency:
+- `current_activity`: approximately every 1 second
+- `summary`: approximately every 1 second
+- `battery`: approximately every 30 seconds
+
+The current summary duration is temporarily the time since BLE startup. It will become the real inference-session duration when product session handling is implemented.
+
+Writing the UTF-8 command:
+
+```text
+status
+```
+
+causes the firmware to immediately publish all three telemetry values. The BLE callback only records the request; battery reads and notifications are processed later from the main loop.
+
+### Test with nRF Connect
+
+1. Upload the normal firmware.
+2. Open the serial monitor and confirm:
+
+   ```text
+   info,ble_advertising,ActivityTracker
+   ```
+
+3. Install and open nRF Connect for Mobile on an Android phone.
+4. Scan for and connect to `ActivityTracker`.
+5. Find service `7b7d0000-...-a5000`.
+6. Enable notifications for `current_activity`, `battery`, and `summary`.
+7. Observe automatic text payload updates.
+8. Write UTF-8 `status` to the command characteristic.
+
+If the write editor only accepts hexadecimal bytes, `status` is:
+
+```text
+73 74 61 74 75 73
+```
+
+The serial `status` command now also reports:
+
+```text
+ble_connected,yes
+```
+
+when a phone is connected.
 
 ## Android MVP App
 
 The Android app is a local, Android-only MVP for the product/demo side of the project. It is not a full smartwatch app and does not use accounts, cloud storage, or a backend.
 
 Current app features:
-- mock BLE-like device connection for UI and session development
+- real BLE scan/connect, telemetry notifications, and command writes
+- optional mock device connection for UI and session development
 - live activity, confidence, battery, session duration, steps, and calories UI
 - MET-based calorie estimate using user weight
 - phone GPS preview on the map
@@ -66,8 +142,8 @@ Current app features:
 - BLE contract v1 constants and text payload parsers
 
 Current limitations:
-- real BLE scan/connect is not implemented yet
-- the firmware does not yet expose the final BLE inference service
+- firmware BLE currently publishes placeholder activity and summary values
+- firmware currently recognizes only the BLE `status` command
 - finished sessions are not persisted/exported yet
 
 Open the Android app in Android Studio by selecting:
@@ -97,12 +173,17 @@ android/README.md
 
 Recommended demo flow:
 1. Install the app on an Android phone from Android Studio.
-2. Tap `Connect mock`.
-3. Open Map and grant location permission.
-4. Tap `Start session`.
-5. Walk, run, or move with the phone; the app records GPS route points only while the session is active.
-6. Lock the phone if needed; the foreground service keeps session recording alive.
-7. Tap `Stop session`.
+2. Power the XIAO and tap `Scan & connect`.
+3. Grant the nearby-device Bluetooth permissions.
+4. Confirm that the app shows `Connected (ble)` and a real battery value.
+5. Open Map and grant location permission.
+6. Tap `Start session`.
+7. Walk, run, or move with the phone; the app records GPS route points only while the session is active.
+8. Lock the phone if needed; the foreground service keeps session recording alive.
+9. Tap `Stop session`.
+
+For a demo without the board, enable `Mock data source` in Settings and connect
+again.
 
 In the final system split:
 - firmware classifies activity, measures battery, tracks session duration, and later counts steps
@@ -367,8 +448,8 @@ Likely next project stages:
 2. build a PC-side training pipeline
 3. run activity classification on-device in real time
 4. store compact activity summaries instead of raw logs in product mode
-5. expose the BLE contract from firmware
-6. replace the Android mock data source with real BLE scan/connect
+5. replace placeholder BLE activity and summary with inference results
+6. implement firmware handling for BLE session commands
 7. persist and export Android sessions for thesis analysis
 
 ## License

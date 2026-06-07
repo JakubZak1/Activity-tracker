@@ -6,6 +6,7 @@
 
 #include "app_config.h"
 #include "battery_reader.h"
+#include "ble_service.h"
 #include "data_logger.h"
 #include "imu_reader.h"
 #include "serial_console.h"
@@ -69,6 +70,8 @@ void printStatus(Stream& serial) {
   serial.print(battery.voltageMv);
   serial.print(",battery_percent,");
   serial.print(battery.percent);
+  serial.print(",ble_connected,");
+  serial.print(ble_service::isConnected() ? "yes" : "no");
   serial.print(",last_error,");
   serial.println(data_logger::lastError());
 }
@@ -309,6 +312,16 @@ void setup() {
     handleFatalError("error,logging_start_failed");
   }
 
+  const bool bleReady = ble_service::begin();
+  if (Serial) {
+    if (bleReady) {
+      Serial.print("info,ble_advertising,");
+      Serial.println(app_config::kBleDeviceName);
+    } else {
+      Serial.println("warn,ble_init_failed");
+    }
+  }
+
   nextSampleMs = millis();
   sampleId = 0;
   writeFailureReported = false;
@@ -324,6 +337,8 @@ void loop() {
   if (Serial) {
     serial_console::service(Serial, handleCommand);
   }
+
+  ble_service::service();
 
   // If logging is disabled, the board stays alive in service mode so you can
   // still use commands like status/list/read/erase/start to recover.

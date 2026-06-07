@@ -43,4 +43,17 @@ object AppPermissions {
 
         return permissions.distinct().toTypedArray()
     }
+
+    fun bluetoothPermissionsToRequest(context: Context): Array<String> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return if (hasLocationPermission(context)) emptyArray() else locationPermissions
+        }
+
+        return listOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.BLUETOOTH_CONNECT,
+        ).filter { permission ->
+            ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+    }
 }

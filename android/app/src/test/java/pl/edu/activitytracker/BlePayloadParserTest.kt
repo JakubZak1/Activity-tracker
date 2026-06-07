@@ -51,4 +51,18 @@ class BlePayloadParserTest {
         assertEquals(410, reading.steps)
         assertEquals(3000L, reading.timestampMillis)
     }
+
+    @Test
+    fun parsesCurrentFirmwarePlaceholderPayloads() {
+        val activity = BlePayloadParser.parseActivity("unknown,0,0")
+        val summary = BlePayloadParser.parseSummary("42,unknown,0")
+
+        requireNotNull(activity)
+        requireNotNull(summary)
+        assertEquals(ActivityType.Unknown, activity.type)
+        assertEquals(0, activity.confidencePercent)
+        assertEquals(42L, summary.sessionDurationSeconds)
+        assertEquals(ActivityType.Unknown, summary.currentActivity)
+        assertEquals(0, summary.steps)
+    }
 }

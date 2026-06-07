@@ -1,5 +1,7 @@
 package pl.edu.activitytracker.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -27,9 +29,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import pl.edu.activitytracker.storage.SettingsUiState
+import pl.edu.activitytracker.permissions.AppPermissions
 import java.util.Locale
 
 @Composable
@@ -42,8 +46,27 @@ fun SettingsScreen(
     onResetSession: () -> Unit,
     onConnect: () -> Unit,
 ) {
+    val context = LocalContext.current
     var weightText by remember { mutableStateOf(settings.weightKg.toString()) }
     var deviceName by remember { mutableStateOf(settings.deviceName) }
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        onConnect()
+    }
+
+    fun connectWithBluetoothPrompt() {
+        val missingPermissions = if (settings.useMockSource) {
+            emptyArray()
+        } else {
+            AppPermissions.bluetoothPermissionsToRequest(context)
+        }
+        if (missingPermissions.isEmpty()) {
+            onConnect()
+        } else {
+            bluetoothPermissionLauncher.launch(missingPermissions)
+        }
+    }
 
     LaunchedEffect(settings.weightKg) {
         val formatted = String.format(Locale.US, "%.1f", settings.weightKg)
@@ -113,13 +136,12 @@ fun SettingsScreen(
                     Switch(
                         checked = settings.useMockSource,
                         onCheckedChange = onUseMockChanged,
-                        enabled = false,
                     )
                 }
 
-                Button(onClick = onConnect) {
+                Button(onClick = ::connectWithBluetoothPrompt) {
                     Icon(Icons.Default.Bluetooth, contentDescription = null)
-                    Text("Connect mock")
+                    Text(if (settings.useMockSource) "Connect mock" else "Scan & connect")
                 }
             }
         }

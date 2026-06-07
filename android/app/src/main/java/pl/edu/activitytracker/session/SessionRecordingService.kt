@@ -6,13 +6,16 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import pl.edu.activitytracker.ActivityTrackerApplication
 import pl.edu.activitytracker.MainActivity
 import pl.edu.activitytracker.R
+import pl.edu.activitytracker.permissions.AppPermissions
 
 class SessionRecordingService : Service() {
     override fun onCreate() {
@@ -22,7 +25,12 @@ class SessionRecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            startForeground(NOTIFICATION_ID, buildNotification())
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                buildNotification(),
+                foregroundServiceTypes(),
+            )
             (application as ActivityTrackerApplication)
                 .appContainer
                 .repository
@@ -32,6 +40,14 @@ class SessionRecordingService : Service() {
         }
 
         return START_NOT_STICKY
+    }
+
+    private fun foregroundServiceTypes(): Int {
+        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        if (AppPermissions.bluetoothPermissionsToRequest(this).isEmpty()) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        }
+        return types
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

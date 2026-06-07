@@ -14,7 +14,7 @@ private val Context.activityTrackerDataStore by preferencesDataStore(name = "act
 data class SettingsUiState(
     val weightKg: Double = SettingsStore.DEFAULT_WEIGHT_KG,
     val deviceName: String = SettingsStore.DEFAULT_DEVICE_NAME,
-    val useMockSource: Boolean = true,
+    val useMockSource: Boolean = false,
 )
 
 class SettingsStore(private val context: Context) {
@@ -22,7 +22,7 @@ class SettingsStore(private val context: Context) {
         SettingsUiState(
             weightKg = preferences[Keys.WEIGHT_KG] ?: DEFAULT_WEIGHT_KG,
             deviceName = preferences[Keys.DEVICE_NAME] ?: DEFAULT_DEVICE_NAME,
-            useMockSource = preferences[Keys.USE_MOCK_SOURCE] ?: true,
+            useMockSource = preferences[Keys.USE_MOCK_SOURCE] ?: false,
         )
     }
 

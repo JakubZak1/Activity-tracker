@@ -40,6 +40,7 @@ import java.util.Locale
 fun HomeScreen(
     paddingValues: PaddingValues,
     state: TrackerState,
+    useMockSource: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onStartSession: () -> Unit,
@@ -54,6 +55,11 @@ fun HomeScreen(
     ) {
         onStartSession()
     }
+    val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) {
+        onConnect()
+    }
 
     fun startSessionWithLocationPrompt() {
         val missingPermissions = AppPermissions.sessionPermissionsToRequest(context)
@@ -61,6 +67,19 @@ fun HomeScreen(
             onStartSession()
         } else {
             locationPermissionLauncher.launch(missingPermissions)
+        }
+    }
+
+    fun connectWithBluetoothPrompt() {
+        val missingPermissions = if (useMockSource) {
+            emptyArray()
+        } else {
+            AppPermissions.bluetoothPermissionsToRequest(context)
+        }
+        if (missingPermissions.isEmpty()) {
+            onConnect()
+        } else {
+            bluetoothPermissionLauncher.launch(missingPermissions)
         }
     }
 
@@ -95,14 +114,21 @@ fun HomeScreen(
                             Text("Disconnect")
                         }
                     } else {
-                        Button(onClick = onConnect) {
+                        Button(
+                            onClick = ::connectWithBluetoothPrompt,
+                            enabled = state.connectionState !is ConnectionState.Scanning &&
+                                state.connectionState !is ConnectionState.Connecting,
+                        ) {
                             Icon(Icons.Default.Bluetooth, contentDescription = null)
-                            Text("Connect")
+                            Text(if (useMockSource) "Connect mock" else "Scan & connect")
                         }
                     }
                 }
 
-                OutlinedButton(onClick = onRequestStatus) {
+                OutlinedButton(
+                    onClick = onRequestStatus,
+                    enabled = isConnected,
+                ) {
                     Icon(Icons.Default.Refresh, contentDescription = null)
                     Text("Request status")
                 }
