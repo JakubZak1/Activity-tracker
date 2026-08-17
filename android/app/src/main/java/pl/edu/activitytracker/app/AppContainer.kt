@@ -3,6 +3,7 @@ package pl.edu.activitytracker.app
 import android.content.Context
 import pl.edu.activitytracker.data.ActivityTrackerRepository
 import pl.edu.activitytracker.data.BleDeviceDataSource
+import pl.edu.activitytracker.data.DatasetController
 import pl.edu.activitytracker.data.MockDeviceDataSource
 import pl.edu.activitytracker.data.SelectableDeviceDataSource
 import pl.edu.activitytracker.gps.AndroidLocationTracker
@@ -28,12 +29,16 @@ class AppContainer(context: Context) {
     private val locationTracker = AndroidLocationTracker(appContext)
     private val sessionRecordingController = SessionRecordingController(appContext)
     private val logFileStore = LogFileStore(appContext)
+    private val datasetController = DatasetController(
+        deviceDataSource = deviceDataSource,
+        fileStore = logFileStore,
+    )
 
     val repository = ActivityTrackerRepository(
         deviceDataSource = deviceDataSource,
+        datasetController = datasetController,
         locationTracker = locationTracker,
         sessionRecordingController = sessionRecordingController,
         settingsStore = settingsStore,
-        logFileStore = logFileStore,
     )
 }

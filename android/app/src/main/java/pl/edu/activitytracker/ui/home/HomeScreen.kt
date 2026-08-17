@@ -16,7 +16,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.BluetoothDisabled
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
@@ -45,20 +44,19 @@ fun HomeScreen(
     onDisconnect: () -> Unit,
     onStartSession: () -> Unit,
     onStopSession: () -> Unit,
-    onRequestStatus: () -> Unit,
 ) {
     val context = LocalContext.current
     val isConnected = state.connectionState is ConnectionState.Connected
     val battery = state.battery
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        onStartSession()
+    ) { grants ->
+        if (grants.values.all { it }) onStartSession()
     }
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) {
-        onConnect()
+    ) { grants ->
+        if (grants.values.all { it }) onConnect()
     }
 
     fun startSessionWithLocationPrompt() {
@@ -124,14 +122,6 @@ fun HomeScreen(
                         }
                     }
                 }
-
-                OutlinedButton(
-                    onClick = onRequestStatus,
-                    enabled = isConnected,
-                ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Text("Request status")
-                }
             }
         }
 
@@ -159,7 +149,7 @@ fun HomeScreen(
 
         Button(
             onClick = if (state.isSessionRunning) onStopSession else ::startSessionWithLocationPrompt,
-            enabled = isConnected,
+            enabled = state.isSessionRunning || isConnected,
             modifier = Modifier.fillMaxWidth(),
         ) {
             if (state.isSessionRunning) {

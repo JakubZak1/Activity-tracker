@@ -4,7 +4,9 @@ enum class FileFrameDecision {
     Accept,
     Duplicate,
     Gap,
+    Overlap,
     Overflow,
+    Empty,
 }
 
 object FileTransferValidator {
@@ -13,10 +15,13 @@ object FileTransferValidator {
         expectedSize: Long,
         frame: FileDataFrame,
     ): FileFrameDecision {
+        if (frame.data.isEmpty()) return FileFrameDecision.Empty
+        val frameEnd = frame.offset + frame.data.size.toLong()
         return when {
-            frame.offset < expectedOffset -> FileFrameDecision.Duplicate
             frame.offset > expectedOffset -> FileFrameDecision.Gap
-            expectedOffset + frame.data.size > expectedSize -> FileFrameDecision.Overflow
+            frame.offset < expectedOffset && frameEnd <= expectedOffset -> FileFrameDecision.Duplicate
+            frame.offset < expectedOffset -> FileFrameDecision.Overlap
+            frameEnd > expectedSize || frameEnd < frame.offset -> FileFrameDecision.Overflow
             else -> FileFrameDecision.Accept
         }
     }

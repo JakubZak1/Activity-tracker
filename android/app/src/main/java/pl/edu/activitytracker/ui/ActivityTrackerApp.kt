@@ -77,7 +77,6 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onDisconnect = viewModel::disconnectDevice,
                     onStartSession = viewModel::startSession,
                     onStopSession = viewModel::stopSession,
-                    onRequestStatus = viewModel::requestStatus,
                 )
             }
             composable(Destination.Map.route) {
@@ -94,6 +93,8 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     paddingValues = paddingValues,
                     state = state,
                     useMockSource = settings.useMockSource,
+                    onConnect = viewModel::connectDevice,
+                    onDisconnect = viewModel::disconnectDevice,
                     onStart = viewModel::startDataCollection,
                     onStop = viewModel::stopDataCollection,
                     onRefresh = viewModel::refreshDataLogs,

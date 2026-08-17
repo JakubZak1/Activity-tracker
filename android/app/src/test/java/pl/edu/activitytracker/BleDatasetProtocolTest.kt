@@ -7,79 +7,131 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import pl.edu.activitytracker.ble.BleDatasetProtocol
+import pl.edu.activitytracker.ble.ControlRecordAssembler
+import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.DeviceCommand
 import pl.edu.activitytracker.domain.DeviceControlResponse
+import pl.edu.activitytracker.domain.DeviceStatus
 import pl.edu.activitytracker.domain.FileDataFrame
 import pl.edu.activitytracker.domain.FileFrameDecision
 import pl.edu.activitytracker.domain.FileTransferValidator
 
 class BleDatasetProtocolTest {
     @Test
-    fun parsesCollectionStatus() {
-        val response = BleDatasetProtocol.parseControlLine(
-            "status,on,walking,walking_0042.csv,2039808,175616,1864192",
+    fun parsesHelloAndAllStatusVariants() {
+        val hello = BleDatasetProtocol.parseControlLine(
+            "ok,7,hello,3,recording;catalog;download;resume;crc32",
+        ) as DeviceControlResponse.Hello
+        assertEquals(7L, hello.requestId)
+        assertEquals(3, hello.protocolVersion)
+        assertTrue("crc32" in hello.capabilities)
+
+        val idle = BleDatasetProtocol.parseControlLine(
+            "status,8,idle,walking_0042.csv,39016,12ABCDEF,1864192",
         ) as DeviceControlResponse.Status
+        assertEquals("walking_0042.csv", (idle.value as DeviceStatus.Idle).lastFile?.name)
 
-        assertTrue(response.value.isLogging)
-        assertEquals("walking", response.value.label)
-        assertEquals("walking_0042.csv", response.value.currentFile)
-        assertEquals(1_864_192L, response.value.freeBytes)
+        val recording = BleDatasetProtocol.parseControlLine(
+            "status,9,recording,running,running_0043.csv,1200,8192,1800000",
+        ) as DeviceControlResponse.Status
+        assertEquals(ActivityType.Running, (recording.value as DeviceStatus.Recording).label)
+
+        val fault = BleDatasetProtocol.parseControlLine(
+            "status,10,fault,flash_write_failed,running_0043.csv,1700000",
+        ) as DeviceControlResponse.Status
+        assertEquals("flash_write_failed", (fault.value as DeviceStatus.Fault).code)
     }
 
     @Test
-    fun parsesClosedFileAndDownloadResponses() {
-        val file = BleDatasetProtocol.parseControlLine("file,walking_0042.csv,39016,closed")
-            as DeviceControlResponse.FileEntry
-        val begin = BleDatasetProtocol.parseControlLine("download_begin,walking_0042.csv,39016,1200")
-            as DeviceControlResponse.DownloadBegin
-        val end = BleDatasetProtocol.parseControlLine("download_end,walking_0042.csv,39016")
-            as DeviceControlResponse.DownloadEnd
+    fun parsesCatalogRecordingAndTransferResponses() {
+        val started = BleDatasetProtocol.parseControlLine(
+            "ok,11,recording_started,walking,walking_0001.csv",
+        ) as DeviceControlResponse.RecordingStarted
+        val stopped = BleDatasetProtocol.parseControlLine(
+            "ok,12,recording_stopped,walking_0001.csv,1234,89ABCDEF",
+        ) as DeviceControlResponse.RecordingStopped
+        val file = BleDatasetProtocol.parseControlLine(
+            "file,13,walking_0001.csv,1234,89ABCDEF,complete",
+        ) as DeviceControlResponse.FileEntry
+        val begin = BleDatasetProtocol.parseControlLine(
+            "download_begin,14,walking_0001.csv,1234,100,89ABCDEF",
+        ) as DeviceControlResponse.DownloadBegin
+        val end = BleDatasetProtocol.parseControlLine(
+            "download_end,14,walking_0001.csv,1234,89ABCDEF",
+        ) as DeviceControlResponse.DownloadEnd
 
-        assertFalse(file.value.isActive)
-        assertEquals(39_016L, file.value.sizeBytes)
-        assertEquals(1_200L, begin.offset)
-        assertEquals(begin.sizeBytes, end.sizeBytes)
+        assertEquals(ActivityType.Walking, started.label)
+        assertEquals(stopped.file, file.value.identity)
+        assertEquals(100L, begin.offset)
+        assertEquals(begin.file, end.file)
     }
 
     @Test
-    fun parsesLittleEndianFileFrame() {
-        val frame = BleDatasetProtocol.parseFileFrame(
-            byteArrayOf(0x78, 0x56, 0x34, 0x12, 1, 2, 3),
-        )
-
-        requireNotNull(frame)
-        assertEquals(0x12345678L, frame.offset)
-        assertArrayEquals(byteArrayOf(1, 2, 3), frame.data)
-        assertNull(BleDatasetProtocol.parseFileFrame(byteArrayOf(1, 2, 3)))
+    fun rejectsMalformedIdsNamesCrcAndMetadata() {
+        assertNull(BleDatasetProtocol.parseControlLine("ok,4294967296,hello,3,recording"))
+        assertNull(BleDatasetProtocol.parseControlLine("file,1,../walk.csv,10,89ABCDEF,complete"))
+        assertNull(BleDatasetProtocol.parseControlLine("file,1,walking_1.csv,10,89abcdef,complete"))
+        assertNull(BleDatasetProtocol.parseControlLine("file,1,walking_1.csv,10,none,complete"))
+        assertNull(BleDatasetProtocol.parseControlLine("status,1,idle,none,10,none,100"))
+        assertNull(BleDatasetProtocol.parseControlLine("download_begin,1,walking_1.csv,10,11,89ABCDEF"))
+        assertNull(BleDatasetProtocol.parseControlLine("garbage,1,value"))
     }
 
     @Test
-    fun rejectsInvalidControlMetadata() {
-        assertNull(BleDatasetProtocol.parseControlLine("status,paused,walking,none,10,2,8"))
-        assertNull(BleDatasetProtocol.parseControlLine("status,off,walking,none,-1,0,0"))
-        assertNull(BleDatasetProtocol.parseControlLine("file,walking_0001.csv,-1,closed"))
-        assertNull(BleDatasetProtocol.parseControlLine("file,walking_0001.csv,10,unknown"))
-        assertNull(BleDatasetProtocol.parseControlLine("download_begin,walking_0001.csv,10,11"))
-        assertNull(BleDatasetProtocol.parseControlLine("list_end,-1"))
+    fun reassemblesFragmentedAndCoalescedControlRecords() {
+        val assembler = ControlRecordAssembler()
+        val input = "ok,1,hello,3,recording;catalog;download;resume;crc32\nstatus,2,idle,none,0,none,100\n"
+            .toByteArray()
+        val records = mutableListOf<String>()
+        input.forEach { byte -> records += assembler.append(byteArrayOf(byte)) }
+        assertEquals(2, records.size)
+        assertTrue(BleDatasetProtocol.parseControlLine(records[0]) is DeviceControlResponse.Hello)
+        assertTrue(BleDatasetProtocol.parseControlLine(records[1]) is DeviceControlResponse.Status)
+
+        val coalesced = ControlRecordAssembler().append("ok,3,cancelled\nok,4,deleted,walking_1.csv\n".toByteArray())
+        assertEquals(2, coalesced.size)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun rejectsOversizedControlRecord() {
+        ControlRecordAssembler().append(ByteArray(256) { 'a'.code.toByte() })
     }
 
     @Test
-    fun validatesResumeOffsetsAndBounds() {
-        val data = byteArrayOf(1, 2, 3)
-        assertEquals(
-            FileFrameDecision.Accept,
-            FileTransferValidator.evaluate(10, 20, FileDataFrame(10, data)),
+    fun fragmentsCommandsForDefaultMtuWithoutLosingBytes() {
+        val command = DeviceCommand.Download(42L, "walking_1234.csv", 123456L)
+        val fragments = BleDatasetProtocol.fragmentCommand(command, attPayloadBytes = 20)
+        assertTrue(fragments.size > 1)
+        assertTrue(fragments.all { it.size <= 20 })
+        val rebuilt = fragments.fold(ByteArray(0)) { result, fragment -> result + fragment }
+        assertArrayEquals(BleDatasetProtocol.encodeCommand(command), rebuilt)
+        assertEquals('\n'.code.toByte(), rebuilt.last())
+    }
+
+    @Test
+    fun parsesRequestIdAndOffsetInBinaryFrames() {
+        val original = FileDataFrame(0x12345678L, 0x90ABCDEFL, byteArrayOf(1, 2, 3))
+        val parsed = BleDatasetProtocol.parseFileFrame(BleDatasetProtocol.encodeFileFrame(original))
+        requireNotNull(parsed)
+        assertEquals(original.requestId, parsed.requestId)
+        assertEquals(original.offset, parsed.offset)
+        assertArrayEquals(original.data, parsed.data)
+        assertNull(BleDatasetProtocol.parseFileFrame(ByteArray(8)))
+    }
+
+    @Test
+    fun validatesDuplicateGapOverlapEmptyAndBounds() {
+        fun decision(expected: Long, offset: Long, bytes: Int) = FileTransferValidator.evaluate(
+            expected,
+            20,
+            FileDataFrame(1L, offset, ByteArray(bytes)),
         )
-        assertEquals(
-            FileFrameDecision.Duplicate,
-            FileTransferValidator.evaluate(10, 20, FileDataFrame(7, data)),
-        )
-        assertEquals(
-            FileFrameDecision.Gap,
-            FileTransferValidator.evaluate(10, 20, FileDataFrame(12, data)),
-        )
-        assertEquals(
-            FileFrameDecision.Overflow,
-            FileTransferValidator.evaluate(19, 20, FileDataFrame(19, data)),
-        )
+        assertEquals(FileFrameDecision.Accept, decision(10, 10, 3))
+        assertEquals(FileFrameDecision.Duplicate, decision(10, 7, 3))
+        assertEquals(FileFrameDecision.Overlap, decision(10, 8, 3))
+        assertEquals(FileFrameDecision.Gap, decision(10, 12, 3))
+        assertEquals(FileFrameDecision.Overflow, decision(19, 19, 2))
+        assertEquals(FileFrameDecision.Empty, decision(10, 10, 0))
+        assertFalse(BleDatasetProtocol.isValidFileName("walking.csv"))
     }
 }

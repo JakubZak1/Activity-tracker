@@ -18,8 +18,13 @@ data class SettingsUiState(
     val dataFolderUri: String? = null,
 )
 
-class SettingsStore(private val context: Context) {
-    val settings: Flow<SettingsUiState> = context.activityTrackerDataStore.data.map { preferences ->
+interface SettingsDataSource {
+    val settings: Flow<SettingsUiState>
+    suspend fun setDataFolderUri(uri: String)
+}
+
+class SettingsStore(private val context: Context) : SettingsDataSource {
+    override val settings: Flow<SettingsUiState> = context.activityTrackerDataStore.data.map { preferences ->
         SettingsUiState(
             weightKg = preferences[Keys.WEIGHT_KG] ?: DEFAULT_WEIGHT_KG,
             deviceName = preferences[Keys.DEVICE_NAME] ?: DEFAULT_DEVICE_NAME,
@@ -49,7 +54,7 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun setDataFolderUri(uri: String) {
+    override suspend fun setDataFolderUri(uri: String) {
         context.activityTrackerDataStore.edit { preferences ->
             preferences[Keys.DATA_FOLDER_URI] = uri
         }

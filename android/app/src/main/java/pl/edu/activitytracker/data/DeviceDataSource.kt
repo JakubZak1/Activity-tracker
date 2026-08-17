@@ -12,6 +12,8 @@ import pl.edu.activitytracker.domain.SummaryReading
 
 interface DeviceDataSource {
     val connectionState: StateFlow<ConnectionState>
+    val connectionGeneration: StateFlow<Long>
+    val deviceIdentity: StateFlow<String?>
     val activity: Flow<ActivityReading>
     val battery: Flow<BatteryReading>
     val summary: Flow<SummaryReading>
@@ -21,5 +23,5 @@ interface DeviceDataSource {
     suspend fun scan()
     suspend fun connect(deviceId: String?)
     suspend fun disconnect()
-    suspend fun sendCommand(command: DeviceCommand)
+    suspend fun sendCommand(command: DeviceCommand): Boolean
 }
