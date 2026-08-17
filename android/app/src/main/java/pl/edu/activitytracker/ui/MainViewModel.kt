@@ -9,6 +9,8 @@ import kotlinx.coroutines.launch
 import pl.edu.activitytracker.data.ActivityTrackerRepository
 import pl.edu.activitytracker.storage.SettingsStore
 import pl.edu.activitytracker.storage.SettingsUiState
+import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.DeviceLogFile
 
 class MainViewModel(
     private val repository: ActivityTrackerRepository,
@@ -34,6 +36,18 @@ class MainViewModel(
 
     fun requestStatus() = repository.requestStatus()
 
+    fun startDataCollection(activityType: ActivityType) = repository.startDataCollection(activityType)
+
+    fun stopDataCollection() = repository.stopDataCollection()
+
+    fun refreshDataLogs() = repository.refreshDataLogs()
+
+    fun downloadLog(file: DeviceLogFile) = repository.downloadLog(file)
+
+    fun deleteDeviceLog(file: DeviceLogFile) = repository.deleteDeviceLog(file)
+
+    fun cancelFileTransfer() = repository.cancelFileTransfer()
+
     fun startLocationIfSessionRunning() = repository.startLocationIfSessionRunning()
 
     fun startLocationPreview() = repository.startLocationPreview()
@@ -57,6 +71,8 @@ class MainViewModel(
             settingsStore.setUseMockSource(useMockSource)
         }
     }
+
+    fun setDataFolderUri(uri: String) = repository.setDataFolderUri(uri)
 
     class Factory(
         private val repository: ActivityTrackerRepository,

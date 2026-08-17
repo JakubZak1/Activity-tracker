@@ -108,6 +108,26 @@ void printStorageSpace(Stream& serial) {
   serial.println(usedPercent, 2);
 }
 
+void resetLoggingRuntime() {
+  sampleId = 0;
+  nextSampleMs = millis();
+  writeFailureReported = false;
+  setLed(false);
+}
+
+bool startLoggingSession() {
+  if (data_logger::isLogging()) {
+    return true;
+  }
+
+  resetLoggingRuntime();
+  return data_logger::startSession(activityLabel);
+}
+
+void stopLoggingSession() {
+  data_logger::stopSession();
+}
+
 void stopLogging(Stream& serial) {
   if (!data_logger::isLogging()) {
     serial.println("ok,logging_already_stopped");
@@ -115,7 +135,7 @@ void stopLogging(Stream& serial) {
   }
 
   // Stop closes the currently open CSV file so it can be safely inspected later.
-  data_logger::stopSession();
+  stopLoggingSession();
   serial.println("ok,logging_stopped");
 }
 
@@ -127,11 +147,7 @@ void startLogging(Stream& serial) {
   }
 
   // A new start means a brand new session file and sample numbering from zero.
-  sampleId = 0;
-  nextSampleMs = millis();
-  writeFailureReported = false;
-  setLed(false);
-  if (!data_logger::startSession(activityLabel)) {
+  if (!startLoggingSession()) {
     serial.print("error,logging_start_failed,");
     serial.println(data_logger::lastError());
     return;
@@ -156,27 +172,208 @@ bool isValidLabel(const char* label) {
   return true;
 }
 
-void setActivityLabel(const char* label, Stream& serial) {
+const char* updateActivityLabel(const char* label) {
   if (data_logger::isLogging()) {
-    serial.println("error,label_change_requires_stop");
-    return;
+    return "label_change_requires_stop";
   }
 
   if (!isValidLabel(label) || strlen(label) >= sizeof(activityLabel)) {
-    serial.println("error,invalid_label,use_lowercase_digits_underscore");
-    return;
+    return "invalid_label,use_lowercase_digits_underscore";
   }
 
   strncpy(activityLabel, label, sizeof(activityLabel) - 1);
   activityLabel[sizeof(activityLabel) - 1] = '\0';
   if (!data_logger::saveLabel(activityLabel)) {
-    serial.print("error,label_save_failed,");
-    serial.println(data_logger::lastError());
+    return data_logger::lastError();
+  }
+  return nullptr;
+}
+
+void setActivityLabel(const char* label, Stream& serial) {
+  const char* error = updateActivityLabel(label);
+  if (error) {
+    serial.print("error,");
+    serial.println(error);
     return;
   }
 
   serial.print("ok,label,");
   serial.println(activityLabel);
+}
+
+const char* protocolFileName(const char* path) {
+  return path && path[0] == '/' ? path + 1 : path;
+}
+
+void sendBleError(const char* error) {
+  char response[app_config::kBleControlResponseBufferSize] = {0};
+  snprintf(response, sizeof(response), "error,%s", error ? error : "unknown");
+  ble_service::sendControlResponse(response);
+}
+
+void sendBleStatus() {
+  uint32_t totalBytes = 0;
+  uint32_t usedBytes = 0;
+  uint32_t freeBytes = 0;
+  if (!data_logger::getStorageStats(totalBytes, usedBytes, freeBytes)) {
+    sendBleError(data_logger::lastError());
+    return;
+  }
+
+  char response[app_config::kBleControlResponseBufferSize] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "status,%s,%s,%s,%lu,%lu,%lu",
+      data_logger::isLogging() ? "on" : "off",
+      activityLabel,
+      data_logger::isLogging() ? protocolFileName(data_logger::currentLogPath()) : "none",
+      static_cast<unsigned long>(totalBytes),
+      static_cast<unsigned long>(usedBytes),
+      static_cast<unsigned long>(freeBytes));
+  ble_service::sendControlResponse(response);
+  ble_service::requestTelemetry();
+}
+
+void handleBleStart() {
+  if (ble_service::isFileOperationActive()) {
+    sendBleError("file_operation_busy");
+    return;
+  }
+  if (data_logger::isLogging()) {
+    char response[96] = {0};
+    snprintf(
+        response,
+        sizeof(response),
+        "ok,logging_already_running,%s",
+        protocolFileName(data_logger::currentLogPath()));
+    ble_service::sendControlResponse(response);
+    return;
+  }
+  if (!startLoggingSession()) {
+    sendBleError(data_logger::lastError());
+    return;
+  }
+
+  char response[96] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,logging_started,%s",
+      protocolFileName(data_logger::currentLogPath()));
+  ble_service::sendControlResponse(response);
+}
+
+void handleBleStop() {
+  if (!data_logger::isLogging()) {
+    ble_service::sendControlResponse("ok,logging_already_stopped");
+    return;
+  }
+
+  char fileName[64] = {0};
+  strncpy(fileName, protocolFileName(data_logger::currentLogPath()), sizeof(fileName) - 1);
+  stopLoggingSession();
+
+  data_logger::LogFileInfo info = {};
+  if (!data_logger::getLogFileInfo(fileName, info)) {
+    sendBleError(data_logger::lastError());
+    return;
+  }
+
+  char response[app_config::kBleControlResponseBufferSize] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,logging_stopped,%s,%lu",
+      info.name,
+      static_cast<unsigned long>(info.sizeBytes));
+  ble_service::sendControlResponse(response);
+}
+
+void handleBleDownload(char* arguments) {
+  char* separator = strchr(arguments, ' ');
+  if (!separator) {
+    sendBleError("download_usage");
+    return;
+  }
+  *separator = '\0';
+  const char* fileName = arguments;
+  const char* offsetText = separator + 1;
+  char* end = nullptr;
+  const unsigned long parsedOffset = strtoul(offsetText, &end, 10);
+  if (offsetText[0] == '\0' || !end || end[0] != '\0') {
+    sendBleError("invalid_offset");
+    return;
+  }
+  if (data_logger::isLogging()) {
+    sendBleError("logging_active");
+    return;
+  }
+  if (ble_service::isFileOperationActive()) {
+    sendBleError("file_operation_busy");
+    return;
+  }
+  if (!ble_service::startFileTransfer(fileName, static_cast<uint32_t>(parsedOffset))) {
+    sendBleError(data_logger::lastError());
+  }
+}
+
+void handleBleDelete(const char* fileName) {
+  if (ble_service::isFileOperationActive()) {
+    sendBleError("file_operation_busy");
+    return;
+  }
+  if (!data_logger::deleteLogFile(fileName)) {
+    sendBleError(data_logger::lastError());
+    return;
+  }
+
+  char response[96] = {0};
+  snprintf(response, sizeof(response), "ok,deleted,%s", fileName);
+  ble_service::sendControlResponse(response);
+}
+
+void handleBleCommand(char* command) {
+  while (*command == ' ') {
+    ++command;
+  }
+
+  if (strcmp(command, "status") == 0) {
+    sendBleStatus();
+  } else if (strcmp(command, "start") == 0) {
+    handleBleStart();
+  } else if (strcmp(command, "stop") == 0) {
+    handleBleStop();
+  } else if (strcmp(command, "list") == 0) {
+    if (!ble_service::startLogList()) {
+      sendBleError(ble_service::isFileOperationActive() ? "file_operation_busy" : data_logger::lastError());
+    }
+  } else if (strcmp(command, "cancel") == 0) {
+    ble_service::cancelFileOperation();
+    ble_service::sendControlResponse("ok,cancelled");
+  } else if (strncmp(command, "label ", 6) == 0) {
+    const char* error = updateActivityLabel(command + 6);
+    if (error) {
+      sendBleError(error);
+      return;
+    }
+    char response[64] = {0};
+    snprintf(response, sizeof(response), "ok,label,%s", activityLabel);
+    ble_service::sendControlResponse(response);
+  } else if (strncmp(command, "download ", 9) == 0) {
+    handleBleDownload(command + 9);
+  } else if (strncmp(command, "delete ", 7) == 0) {
+    handleBleDelete(command + 7);
+  } else {
+    sendBleError("unknown_command");
+  }
+}
+
+void serviceBleCommands() {
+  char command[app_config::kBleCommandBufferSize] = {0};
+  if (ble_service::takeCommand(command, sizeof(command))) {
+    handleBleCommand(command);
+  }
 }
 
 void eraseLogs(Stream& serial) {
@@ -187,10 +384,7 @@ void eraseLogs(Stream& serial) {
     return;
   }
 
-  sampleId = 0;
-  nextSampleMs = millis();
-  writeFailureReported = false;
-  setLed(false);
+  resetLoggingRuntime();
   serial.println("ok,erase_completed");
 }
 
@@ -308,10 +502,6 @@ void setup() {
   data_logger::loadSavedLabel(activityLabel, sizeof(activityLabel));
   data_logger::clearError();
 
-  if (!data_logger::startSession(activityLabel)) {
-    handleFatalError("error,logging_start_failed");
-  }
-
   const bool bleReady = ble_service::begin();
   if (Serial) {
     if (bleReady) {
@@ -322,13 +512,11 @@ void setup() {
     }
   }
 
-  nextSampleMs = millis();
-  sampleId = 0;
-  writeFailureReported = false;
+  resetLoggingRuntime();
 
   if (Serial) {
-    Serial.print("info,logging_to,");
-    Serial.println(data_logger::currentLogPath());
+    Serial.print("info,logging,waiting_for_start,label,");
+    Serial.println(activityLabel);
     printHelp(Serial);
   }
 }
@@ -339,6 +527,7 @@ void loop() {
   }
 
   ble_service::service();
+  serviceBleCommands();
 
   // If logging is disabled, the board stays alive in service mode so you can
   // still use commands like status/list/read/erase/start to recover.

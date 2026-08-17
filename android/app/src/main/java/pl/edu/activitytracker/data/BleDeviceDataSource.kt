@@ -25,6 +25,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -32,13 +33,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import pl.edu.activitytracker.ble.BleContract
+import pl.edu.activitytracker.ble.BleDatasetProtocol
 import pl.edu.activitytracker.ble.BlePayloadParser
 import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DeviceCommand
+import pl.edu.activitytracker.domain.DeviceProtocolEvent
 import pl.edu.activitytracker.domain.RawDeviceEvent
 import pl.edu.activitytracker.domain.SummaryReading
 import pl.edu.activitytracker.domain.Transport
@@ -67,6 +71,9 @@ class BleDeviceDataSource(
     private val _rawEvents = MutableSharedFlow<RawDeviceEvent>(extraBufferCapacity = 64)
     override val rawEvents = _rawEvents.asSharedFlow()
 
+    private val protocolEventChannel = Channel<DeviceProtocolEvent>(Channel.UNLIMITED)
+    override val protocolEvents = protocolEventChannel.receiveAsFlow()
+
     private val notificationQueue = ArrayDeque<BluetoothGattCharacteristic>()
     private val commandQueue = ArrayDeque<ByteArray>()
     private val commandLock = Any()
@@ -77,6 +84,8 @@ class BleDeviceDataSource(
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
     private var commandWriteInProgress = false
     private var requestedDeviceId: String? = null
+    private var serviceDiscoveryStarted = false
+    private val controlLineBuffer = StringBuilder()
 
     init {
         scope.launch {
@@ -106,6 +115,7 @@ class BleDeviceDataSource(
         }
         commandCharacteristic = null
         notificationQueue.clear()
+        controlLineBuffer.clear()
         bluetoothGatt?.disconnect()
         bluetoothGatt?.close()
         bluetoothGatt = null
@@ -221,9 +231,18 @@ class BleDeviceDataSource(
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     _connectionState.value = ConnectionState.Connecting
-                    emitRaw("connection", "discovering_services")
-                    if (!gatt.discoverServices()) {
-                        failAndClose(gatt, "Could not discover BLE services")
+                    emitRaw("connection", "requesting_mtu")
+                    gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                    serviceDiscoveryStarted = false
+                    if (!gatt.requestMtu(REQUESTED_MTU)) {
+                        discoverServices(gatt)
+                    } else {
+                        scope.launch {
+                            delay(MTU_REQUEST_TIMEOUT_MS)
+                            if (bluetoothGatt === gatt && !serviceDiscoveryStarted) {
+                                discoverServices(gatt)
+                            }
+                        }
                     }
                 }
 
@@ -233,6 +252,12 @@ class BleDeviceDataSource(
                     emitRaw("connection", "disconnected")
                 }
             }
+        }
+
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (bluetoothGatt !== gatt) return
+            emitRaw("mtu", "$mtu,$status")
+            discoverServices(gatt)
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -258,10 +283,12 @@ class BleDeviceDataSource(
                 BleContract.CURRENT_ACTIVITY_UUID,
                 BleContract.BATTERY_UUID,
                 BleContract.SUMMARY_UUID,
+                BleContract.CONTROL_RESPONSE_UUID,
+                BleContract.FILE_DATA_UUID,
             ).mapNotNull(service::getCharacteristic)
 
-            if (notificationCharacteristics.size != 3) {
-                failAndClose(gatt, "Telemetry characteristics not found")
+            if (notificationCharacteristics.size != 5) {
+                failAndClose(gatt, "Required BLE characteristics not found")
                 return
             }
 
@@ -315,7 +342,6 @@ class BleDeviceDataSource(
         if (notificationQueue.isEmpty()) {
             _connectionState.value = ConnectionState.Connected(Transport.Ble)
             emitRaw("connection", "connected,notifications_enabled")
-            queueCommand(DeviceCommand.Status.payload)
             return
         }
 
@@ -346,23 +372,66 @@ class BleDeviceDataSource(
     }
 
     private fun handleCharacteristicValue(uuid: UUID, value: ByteArray) {
-        val payload = value.toString(Charsets.UTF_8).trim().trimEnd('\u0000')
         val timestamp = System.currentTimeMillis()
         when (uuid) {
             BleContract.CURRENT_ACTIVITY_UUID -> {
+                val payload = textPayload(value)
                 emitRaw("current_activity", payload, timestamp)
                 BlePayloadParser.parseActivity(payload, timestamp)?.let(_activity::tryEmit)
             }
 
             BleContract.BATTERY_UUID -> {
+                val payload = textPayload(value)
                 emitRaw("battery", payload, timestamp)
                 BlePayloadParser.parseBattery(payload, timestamp)?.let(_battery::tryEmit)
             }
 
             BleContract.SUMMARY_UUID -> {
+                val payload = textPayload(value)
                 emitRaw("summary", payload, timestamp)
                 BlePayloadParser.parseSummary(payload, timestamp)?.let(_summary::tryEmit)
             }
+
+            BleContract.CONTROL_RESPONSE_UUID -> handleControlBytes(value, timestamp)
+
+            BleContract.FILE_DATA_UUID -> {
+                BleDatasetProtocol.parseFileFrame(value)?.let { frame ->
+                    protocolEventChannel.trySend(DeviceProtocolEvent.FileData(frame))
+                }
+            }
+        }
+    }
+
+    private fun textPayload(value: ByteArray): String =
+        value.toString(Charsets.UTF_8).trim().trimEnd('\u0000')
+
+    private fun handleControlBytes(value: ByteArray, timestamp: Long) {
+        controlLineBuffer.append(value.toString(Charsets.UTF_8).trimEnd('\u0000'))
+        if (controlLineBuffer.length > MAX_CONTROL_BUFFER_LENGTH) {
+            controlLineBuffer.clear()
+            emitRaw("control_error", "response_too_long", timestamp)
+            return
+        }
+
+        while (true) {
+            val newlineIndex = controlLineBuffer.indexOf("\n")
+            if (newlineIndex < 0) return
+            val line = controlLineBuffer.substring(0, newlineIndex).trimEnd('\r')
+            controlLineBuffer.delete(0, newlineIndex + 1)
+            if (line.isBlank()) continue
+
+            emitRaw("control_response", line, timestamp)
+            val response = BleDatasetProtocol.parseControlLine(line) ?: continue
+            protocolEventChannel.trySend(DeviceProtocolEvent.Control(response))
+        }
+    }
+
+    private fun discoverServices(gatt: BluetoothGatt) {
+        if (bluetoothGatt !== gatt || serviceDiscoveryStarted) return
+        serviceDiscoveryStarted = true
+        emitRaw("connection", "discovering_services")
+        if (!gatt.discoverServices()) {
+            failAndClose(gatt, "Could not discover BLE services")
         }
     }
 
@@ -457,6 +526,8 @@ class BleDeviceDataSource(
     private fun resetGattState() {
         commandCharacteristic = null
         notificationQueue.clear()
+        controlLineBuffer.clear()
+        serviceDiscoveryStarted = false
         synchronized(commandLock) {
             commandQueue.clear()
             commandWriteInProgress = false
@@ -484,6 +555,9 @@ class BleDeviceDataSource(
     companion object {
         private const val DEFAULT_DEVICE_NAME = "ActivityTracker"
         private const val SCAN_TIMEOUT_MS = 12_000L
+        private const val REQUESTED_MTU = 247
+        private const val MTU_REQUEST_TIMEOUT_MS = 2_000L
+        private const val MAX_CONTROL_BUFFER_LENGTH = 2_048
         private val CLIENT_CHARACTERISTIC_CONFIG_UUID =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }

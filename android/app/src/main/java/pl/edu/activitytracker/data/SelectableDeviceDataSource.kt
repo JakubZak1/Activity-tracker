@@ -15,6 +15,7 @@ import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DeviceCommand
+import pl.edu.activitytracker.domain.DeviceProtocolEvent
 import pl.edu.activitytracker.domain.RawDeviceEvent
 import pl.edu.activitytracker.domain.SummaryReading
 
@@ -35,6 +36,7 @@ class SelectableDeviceDataSource(
     override val battery: Flow<BatteryReading> = activeSource.flatMapLatest { it.battery }
     override val summary: Flow<SummaryReading> = activeSource.flatMapLatest { it.summary }
     override val rawEvents: Flow<RawDeviceEvent> = activeSource.flatMapLatest { it.rawEvents }
+    override val protocolEvents: Flow<DeviceProtocolEvent> = activeSource.flatMapLatest { it.protocolEvents }
 
     init {
         scope.launch {

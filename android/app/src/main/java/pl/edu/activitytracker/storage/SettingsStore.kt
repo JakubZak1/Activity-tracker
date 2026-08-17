@@ -15,6 +15,7 @@ data class SettingsUiState(
     val weightKg: Double = SettingsStore.DEFAULT_WEIGHT_KG,
     val deviceName: String = SettingsStore.DEFAULT_DEVICE_NAME,
     val useMockSource: Boolean = false,
+    val dataFolderUri: String? = null,
 )
 
 class SettingsStore(private val context: Context) {
@@ -23,6 +24,7 @@ class SettingsStore(private val context: Context) {
             weightKg = preferences[Keys.WEIGHT_KG] ?: DEFAULT_WEIGHT_KG,
             deviceName = preferences[Keys.DEVICE_NAME] ?: DEFAULT_DEVICE_NAME,
             useMockSource = preferences[Keys.USE_MOCK_SOURCE] ?: false,
+            dataFolderUri = preferences[Keys.DATA_FOLDER_URI],
         )
     }
 
@@ -47,10 +49,17 @@ class SettingsStore(private val context: Context) {
         }
     }
 
+    suspend fun setDataFolderUri(uri: String) {
+        context.activityTrackerDataStore.edit { preferences ->
+            preferences[Keys.DATA_FOLDER_URI] = uri
+        }
+    }
+
     private object Keys {
         val WEIGHT_KG = doublePreferencesKey("weight_kg")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val USE_MOCK_SOURCE = booleanPreferencesKey("use_mock_source")
+        val DATA_FOLDER_URI = stringPreferencesKey("data_folder_uri")
     }
 
     companion object {

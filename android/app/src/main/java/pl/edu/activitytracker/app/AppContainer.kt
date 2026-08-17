@@ -8,6 +8,7 @@ import pl.edu.activitytracker.data.SelectableDeviceDataSource
 import pl.edu.activitytracker.gps.AndroidLocationTracker
 import pl.edu.activitytracker.session.SessionRecordingController
 import pl.edu.activitytracker.storage.SettingsStore
+import pl.edu.activitytracker.storage.LogFileStore
 import kotlinx.coroutines.flow.map
 
 class AppContainer(context: Context) {
@@ -26,11 +27,13 @@ class AppContainer(context: Context) {
     )
     private val locationTracker = AndroidLocationTracker(appContext)
     private val sessionRecordingController = SessionRecordingController(appContext)
+    private val logFileStore = LogFileStore(appContext)
 
     val repository = ActivityTrackerRepository(
         deviceDataSource = deviceDataSource,
         locationTracker = locationTracker,
         sessionRecordingController = sessionRecordingController,
         settingsStore = settingsStore,
+        logFileStore = logFileStore,
     )
 }

@@ -22,9 +22,13 @@ Adafruit_SPIFlash flash(&flashTransport);
 const SPIFlash_Device_t kFlashDevices[] = {P25Q16H};
 FatFileSystem fatfs;
 FatFile logFile;
+FatFile transferFile;
+FatFile listRoot;
+FatFile listEntry;
 uint32_t samplesSinceFlush = 0;
-uint16_t sessionIndex = 0;
+uint32_t sessionIndex = 0;
 char currentLogPathBuffer[48] = {0};
+char transferFileNameBuffer[64] = {0};
 char lastErrorBuffer[48] = {0};
 
 void setError(const char* message) {
@@ -36,10 +40,30 @@ const char* normalizePath(const char* path) {
   return (path && path[0] == '/') ? path + 1 : path;
 }
 
-bool isManagedLogFile(const char* name) {
+bool isCsvFile(const char* name) {
   const char* normalized = normalizePath(name);
   const char* extension = strrchr(normalized, '.');
-  return (extension && strcmp(extension, ".csv") == 0) || strcmp(normalized, "session_index.txt") == 0;
+  return extension && strcmp(extension, ".csv") == 0;
+}
+
+bool isSafeLogFileName(const char* name) {
+  const char* normalized = normalizePath(name);
+  if (!normalized || normalized[0] == '\0' || !isCsvFile(normalized)) {
+    return false;
+  }
+
+  for (size_t i = 0; normalized[i] != '\0'; ++i) {
+    const char ch = normalized[i];
+    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '.')) {
+      return false;
+    }
+  }
+
+  return strchr(normalized, '/') == nullptr && strchr(normalized, '\\') == nullptr;
+}
+
+bool isCurrentLogFile(const char* name) {
+  return currentLogPathBuffer[0] != '\0' && strcmp(normalizePath(currentLogPathBuffer), normalizePath(name)) == 0;
 }
 
 bool isSafeLabelChar(char ch) {
@@ -64,7 +88,7 @@ void sanitizeLabelForPath(const char* label, char* output, size_t outputSize) {
   output[outIndex] = '\0';
 }
 
-uint16_t readSessionIndex() {
+uint32_t readSessionIndex() {
   FatFile indexFile;
   if (!indexFile.open(app_config::kSessionIndexPath, O_RDONLY)) {
     return 0;
@@ -77,10 +101,10 @@ uint16_t readSessionIndex() {
     return 0;
   }
 
-  return static_cast<uint16_t>(atoi(buffer));
+  return static_cast<uint32_t>(strtoul(buffer, nullptr, 10));
 }
 
-bool writeSessionIndex(uint16_t nextIndex) {
+bool writeSessionIndex(uint32_t nextIndex) {
   if (fatfs.exists(app_config::kSessionIndexPath) && !fatfs.remove(app_config::kSessionIndexPath)) {
     setError("session_index_remove_failed");
     return false;
@@ -93,7 +117,7 @@ bool writeSessionIndex(uint16_t nextIndex) {
   }
 
   char buffer[16] = {0};
-  snprintf(buffer, sizeof(buffer), "%u\n", nextIndex);
+  snprintf(buffer, sizeof(buffer), "%lu\n", static_cast<unsigned long>(nextIndex));
   const bool ok = indexFile.write(buffer, strlen(buffer)) == strlen(buffer);
   indexFile.flush();
   indexFile.close();
@@ -118,7 +142,7 @@ bool removeManagedFiles() {
     entry.getName(name, sizeof(name));
     entry.close();
 
-    if (isManagedLogFile(name) && !fatfs.remove(name)) {
+    if (isCsvFile(name) && !fatfs.remove(name)) {
       ok = false;
     }
   }
@@ -159,11 +183,21 @@ bool startSession(const char* label) {
   sessionIndex = readSessionIndex();
   char safeLabel[app_config::kActivityLabelBufferSize] = {0};
   sanitizeLabelForPath(label, safeLabel, sizeof(safeLabel));
-  snprintf(currentLogPathBuffer, sizeof(currentLogPathBuffer), "/%s_%04u.csv", safeLabel, sessionIndex);
-
-  if (fatfs.exists(currentLogPathBuffer) && !fatfs.remove(currentLogPathBuffer)) {
-    setError("old_log_remove_failed");
-    return false;
+  while (true) {
+    if (sessionIndex == UINT32_MAX) {
+      setError("session_index_exhausted");
+      return false;
+    }
+    snprintf(
+        currentLogPathBuffer,
+        sizeof(currentLogPathBuffer),
+        "/%s_%04lu.csv",
+        safeLabel,
+        static_cast<unsigned long>(sessionIndex));
+    if (!fatfs.exists(currentLogPathBuffer)) {
+      break;
+    }
+    sessionIndex++;
   }
 
   if (!logFile.open(currentLogPathBuffer, O_RDWR | O_CREAT)) {
@@ -180,8 +214,10 @@ bool startSession(const char* label) {
   logFile.flush();
   samplesSinceFlush = 0;
 
-  if (!writeSessionIndex(static_cast<uint16_t>(sessionIndex + 1))) {
+  if (!writeSessionIndex(sessionIndex + 1)) {
     logFile.close();
+    fatfs.remove(currentLogPathBuffer);
+    currentLogPathBuffer[0] = '\0';
     return false;
   }
 
@@ -254,6 +290,8 @@ void flushIfNeeded() {
 bool eraseLogs() {
   clearError();
   stopSession();
+  endFileRead();
+  endLogList();
   currentLogPathBuffer[0] = '\0';
   return removeManagedFiles();
 }
@@ -360,6 +398,150 @@ bool readFileToStream(const char* path, Stream& serial) {
 
   file.close();
   return true;
+}
+
+bool beginLogList() {
+  clearError();
+  endLogList();
+  if (!listRoot.open("/")) {
+    setError("root_open_failed");
+    return false;
+  }
+  return true;
+}
+
+bool nextLogFile(LogFileInfo& info) {
+  clearError();
+  if (!listRoot.isOpen()) {
+    setError("list_not_open");
+    return false;
+  }
+
+  while (listEntry.openNext(&listRoot, O_RDONLY)) {
+    char name[sizeof(info.name)] = {0};
+    listEntry.getName(name, sizeof(name));
+    const uint32_t sizeBytes = listEntry.fileSize();
+    listEntry.close();
+
+    if (!isCsvFile(name)) {
+      continue;
+    }
+
+    strncpy(info.name, normalizePath(name), sizeof(info.name) - 1);
+    info.name[sizeof(info.name) - 1] = '\0';
+    info.sizeBytes = sizeBytes;
+    info.active = logFile.isOpen() && isCurrentLogFile(info.name);
+    return true;
+  }
+
+  return false;
+}
+
+void endLogList() {
+  if (listEntry.isOpen()) {
+    listEntry.close();
+  }
+  if (listRoot.isOpen()) {
+    listRoot.close();
+  }
+}
+
+bool getLogFileInfo(const char* path, LogFileInfo& info) {
+  clearError();
+  if (!isSafeLogFileName(path)) {
+    setError("invalid_log_name");
+    return false;
+  }
+
+  FatFile file;
+  const char* normalized = normalizePath(path);
+  if (!file.open(normalized, O_RDONLY)) {
+    setError("file_not_found");
+    return false;
+  }
+
+  strncpy(info.name, normalized, sizeof(info.name) - 1);
+  info.name[sizeof(info.name) - 1] = '\0';
+  info.sizeBytes = file.fileSize();
+  info.active = logFile.isOpen() && isCurrentLogFile(normalized);
+  file.close();
+  return true;
+}
+
+bool deleteLogFile(const char* path) {
+  clearError();
+  if (!isSafeLogFileName(path)) {
+    setError("invalid_log_name");
+    return false;
+  }
+
+  const char* normalized = normalizePath(path);
+  if (logFile.isOpen() && isCurrentLogFile(normalized)) {
+    setError("file_is_active");
+    return false;
+  }
+  if (transferFile.isOpen() && strcmp(transferFileNameBuffer, normalized) == 0) {
+    setError("file_transfer_active");
+    return false;
+  }
+  if (!fatfs.exists(normalized)) {
+    setError("file_not_found");
+    return false;
+  }
+  if (!fatfs.remove(normalized)) {
+    setError("file_delete_failed");
+    return false;
+  }
+  return true;
+}
+
+bool beginFileRead(const char* path, uint32_t offset, uint32_t& sizeBytes) {
+  clearError();
+  if (logFile.isOpen()) {
+    setError("logging_active");
+    return false;
+  }
+  if (!isSafeLogFileName(path)) {
+    setError("invalid_log_name");
+    return false;
+  }
+
+  endFileRead();
+  const char* normalized = normalizePath(path);
+  if (!transferFile.open(normalized, O_RDONLY)) {
+    setError("file_not_found");
+    return false;
+  }
+
+  sizeBytes = transferFile.fileSize();
+  if (offset > sizeBytes || !transferFile.seekSet(offset)) {
+    transferFile.close();
+    setError("invalid_offset");
+    return false;
+  }
+
+  strncpy(transferFileNameBuffer, normalized, sizeof(transferFileNameBuffer) - 1);
+  transferFileNameBuffer[sizeof(transferFileNameBuffer) - 1] = '\0';
+  return true;
+}
+
+int readFileChunk(uint8_t* buffer, size_t bufferSize) {
+  if (!transferFile.isOpen() || !buffer || bufferSize == 0) {
+    setError("file_read_not_open");
+    return -1;
+  }
+  return transferFile.read(buffer, bufferSize);
+}
+
+void endFileRead() {
+  if (transferFile.isOpen()) {
+    transferFile.close();
+  }
+  transferFileNameBuffer[0] = '\0';
+}
+
+bool isFileReadOpen() {
+  return transferFile.isOpen();
 }
 
 bool getStorageStats(uint32_t& totalBytes, uint32_t& usedBytes, uint32_t& freeBytes) {

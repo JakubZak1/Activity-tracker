@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import pl.edu.activitytracker.ble.BlePayloadParser
@@ -18,6 +19,7 @@ import pl.edu.activitytracker.domain.ActivityType
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DeviceCommand
+import pl.edu.activitytracker.domain.DeviceProtocolEvent
 import pl.edu.activitytracker.domain.RawDeviceEvent
 import pl.edu.activitytracker.domain.SummaryReading
 import pl.edu.activitytracker.domain.Transport
@@ -49,6 +51,7 @@ class MockDeviceDataSource : DeviceDataSource {
 
     private val _rawEvents = MutableSharedFlow<RawDeviceEvent>(extraBufferCapacity = 64)
     override val rawEvents: SharedFlow<RawDeviceEvent> = _rawEvents.asSharedFlow()
+    override val protocolEvents = emptyFlow<DeviceProtocolEvent>()
 
     private var telemetryJob: Job? = null
     private var sessionRunning = false
@@ -97,8 +100,13 @@ class MockDeviceDataSource : DeviceDataSource {
                 steps = 0
             }
             DeviceCommand.Status,
+            DeviceCommand.ListLogs,
+            DeviceCommand.Cancel,
             DeviceCommand.ModeDataset,
             DeviceCommand.ModeInference -> Unit
+            is DeviceCommand.SetLabel,
+            is DeviceCommand.Download,
+            is DeviceCommand.Delete -> emitRaw("command_error", "dataset_management_unavailable")
         }
     }
 
