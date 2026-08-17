@@ -1,22 +1,35 @@
 #include "app.h"
 
-#include <Arduino.h>
 #include <Adafruit_TinyUSB.h>
+#include <Arduino.h>
+#include <stdio.h>
 #include <string.h>
 
+#include "activity_state.h"
 #include "app_config.h"
 #include "battery_reader.h"
 #include "ble_service.h"
+#include "crc32.h"
 #include "data_logger.h"
 #include "imu_reader.h"
+#include "protocol_v3.h"
 #include "serial_console.h"
 
 namespace {
+enum class ResponseTransport : uint8_t {
+  Ble,
+  Serial,
+};
+
+activity_state::RecordingMachine recordingMachine;
+uint32_t recordingStartedAtMs = 0;
 uint32_t nextSampleMs = 0;
 uint32_t sampleId = 0;
 bool serialStreaming = false;
-bool writeFailureReported = false;
-char activityLabel[app_config::kActivityLabelBufferSize] = {0};
+bool serialFaultReported = false;
+bool bleFaultReported = false;
+bool faultBleWasConnected = false;
+char recordingFault[64] = {0};
 
 void setLed(bool on) {
   digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
@@ -33,7 +46,7 @@ void blinkFatalPattern(uint32_t onMs, uint32_t offMs) {
 
 void waitForSerial(uint32_t timeoutMs) {
   const uint32_t start = millis();
-  while (!Serial && (millis() - start < timeoutMs)) {
+  while (!Serial && millis() - start < timeoutMs) {
     delay(10);
   }
 }
@@ -45,439 +58,476 @@ void handleFatalError(const char* message) {
   blinkFatalPattern(120, 880);
 }
 
-void resetActivityLabel() {
-  strncpy(activityLabel, app_config::kDefaultActivityLabel, sizeof(activityLabel) - 1);
-  activityLabel[sizeof(activityLabel) - 1] = '\0';
-}
-
-void printHelp(Stream& serial) {
-  serial.println("commands: help, status, battery, space, list, read <file>, label <name>, start, stop, stream on, stream off, erase");
-}
-
-void printStatus(Stream& serial) {
-  serial.print("status,logging,");
-  serial.print(data_logger::isLogging() ? "on" : "off");
-  serial.print(",stream,");
-  serial.print(serialStreaming ? "on" : "off");
-  serial.print(",label,");
-  serial.print(activityLabel);
-  serial.print(",imu,0x");
-  serial.print(imu_reader::activeAddress(), HEX);
-  serial.print(",current_file,");
-  serial.print(data_logger::isLogging() ? data_logger::currentLogPath() : "none");
-  const BatteryStatus battery = battery_reader::readStatus();
-  serial.print(",battery_mv,");
-  serial.print(battery.voltageMv);
-  serial.print(",battery_percent,");
-  serial.print(battery.percent);
-  serial.print(",ble_connected,");
-  serial.print(ble_service::isConnected() ? "yes" : "no");
-  serial.print(",last_error,");
-  serial.println(data_logger::lastError());
-}
-
-void printBatteryStatus(Stream& serial) {
-  const BatteryStatus battery = battery_reader::readStatus();
-  serial.print("battery,voltage_mv,");
-  serial.print(battery.voltageMv);
-  serial.print(",percent,");
-  serial.print(battery.percent);
-  serial.print(",raw_adc,");
-  serial.println(battery.rawAdc);
-}
-
-void printStorageSpace(Stream& serial) {
-  uint32_t totalBytes = 0;
-  uint32_t usedBytes = 0;
-  uint32_t freeBytes = 0;
-  if (!data_logger::getStorageStats(totalBytes, usedBytes, freeBytes)) {
-    serial.print("error,space_failed,");
-    serial.println(data_logger::lastError());
-    return;
-  }
-
-  const float usedPercent = totalBytes > 0 ? (100.0f * static_cast<float>(usedBytes) / static_cast<float>(totalBytes)) : 0.0f;
-
-  serial.print("space,total_bytes,");
-  serial.print(totalBytes);
-  serial.print(",used_bytes,");
-  serial.print(usedBytes);
-  serial.print(",free_bytes,");
-  serial.print(freeBytes);
-  serial.print(",used_percent,");
-  serial.println(usedPercent, 2);
-}
-
-void resetLoggingRuntime() {
+void resetSamplingRuntime() {
   sampleId = 0;
   nextSampleMs = millis();
-  writeFailureReported = false;
+  recordingStartedAtMs = nextSampleMs;
+  serialFaultReported = false;
+  bleFaultReported = false;
+  faultBleWasConnected = false;
   setLed(false);
 }
 
-bool startLoggingSession() {
-  if (data_logger::isLogging()) {
+void copyFault(const char* error) {
+  strncpy(recordingFault, error ? error : "recording_failed", sizeof(recordingFault) - 1);
+  recordingFault[sizeof(recordingFault) - 1] = '\0';
+  serialFaultReported = false;
+  bleFaultReported = false;
+  faultBleWasConnected = ble_service::isConnected();
+  recordingMachine.fail();
+  setLed(false);
+}
+
+bool sendResponse(ResponseTransport transport, Stream* serial, const char* response) {
+  if (transport == ResponseTransport::Ble) {
+    return ble_service::sendControlResponse(response);
+  }
+  if (serial) {
+    serial->println(response);
     return true;
   }
-
-  resetLoggingRuntime();
-  return data_logger::startSession(activityLabel);
+  return false;
 }
 
-void stopLoggingSession() {
-  data_logger::stopSession();
-}
-
-void stopLogging(Stream& serial) {
-  if (!data_logger::isLogging()) {
-    serial.println("ok,logging_already_stopped");
-    return;
-  }
-
-  // Stop closes the currently open CSV file so it can be safely inspected later.
-  stopLoggingSession();
-  serial.println("ok,logging_stopped");
-}
-
-void startLogging(Stream& serial) {
-  if (data_logger::isLogging()) {
-    serial.print("ok,logging_already_running,");
-    serial.println(data_logger::currentLogPath());
-    return;
-  }
-
-  // A new start means a brand new session file and sample numbering from zero.
-  if (!startLoggingSession()) {
-    serial.print("error,logging_start_failed,");
-    serial.println(data_logger::lastError());
-    return;
-  }
-
-  serial.print("ok,logging_started,");
-  serial.println(data_logger::currentLogPath());
-}
-
-bool isValidLabel(const char* label) {
-  if (!label || label[0] == '\0') {
-    return false;
-  }
-
-  for (size_t i = 0; label[i] != '\0'; ++i) {
-    const char ch = label[i];
-    if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_')) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
-const char* updateActivityLabel(const char* label) {
-  if (data_logger::isLogging()) {
-    return "label_change_requires_stop";
-  }
-
-  if (!isValidLabel(label) || strlen(label) >= sizeof(activityLabel)) {
-    return "invalid_label,use_lowercase_digits_underscore";
-  }
-
-  strncpy(activityLabel, label, sizeof(activityLabel) - 1);
-  activityLabel[sizeof(activityLabel) - 1] = '\0';
-  if (!data_logger::saveLabel(activityLabel)) {
-    return data_logger::lastError();
-  }
-  return nullptr;
-}
-
-void setActivityLabel(const char* label, Stream& serial) {
-  const char* error = updateActivityLabel(label);
-  if (error) {
-    serial.print("error,");
-    serial.println(error);
-    return;
-  }
-
-  serial.print("ok,label,");
-  serial.println(activityLabel);
-}
-
-const char* protocolFileName(const char* path) {
-  return path && path[0] == '/' ? path + 1 : path;
-}
-
-void sendBleError(const char* error) {
-  char response[app_config::kBleControlResponseBufferSize] = {0};
-  snprintf(response, sizeof(response), "error,%s", error ? error : "unknown");
-  ble_service::sendControlResponse(response);
-}
-
-void sendBleStatus() {
-  uint32_t totalBytes = 0;
-  uint32_t usedBytes = 0;
-  uint32_t freeBytes = 0;
-  if (!data_logger::getStorageStats(totalBytes, usedBytes, freeBytes)) {
-    sendBleError(data_logger::lastError());
-    return;
-  }
-
+void sendError(
+    ResponseTransport transport,
+    Stream* serial,
+    uint32_t requestId,
+    const char* errorCode) {
   char response[app_config::kBleControlResponseBufferSize] = {0};
   snprintf(
       response,
       sizeof(response),
-      "status,%s,%s,%s,%lu,%lu,%lu",
-      data_logger::isLogging() ? "on" : "off",
-      activityLabel,
-      data_logger::isLogging() ? protocolFileName(data_logger::currentLogPath()) : "none",
-      static_cast<unsigned long>(totalBytes),
-      static_cast<unsigned long>(usedBytes),
-      static_cast<unsigned long>(freeBytes));
-  ble_service::sendControlResponse(response);
-  ble_service::requestTelemetry();
+      "error,%lu,%s",
+      static_cast<unsigned long>(requestId),
+      errorCode ? errorCode : "unknown");
+  sendResponse(transport, serial, response);
 }
 
-void handleBleStart() {
-  if (ble_service::isFileOperationActive()) {
-    sendBleError("file_operation_busy");
+bool getFreeBytes(uint32_t& freeBytes) {
+  uint32_t totalBytes = 0;
+  uint32_t usedBytes = 0;
+  return data_logger::getStorageStats(totalBytes, usedBytes, freeBytes);
+}
+
+void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) {
+  char response[128] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,%lu,hello,3,recording;catalog;download;resume;crc32",
+      static_cast<unsigned long>(requestId));
+  sendResponse(transport, serial, response);
+}
+
+void sendStatus(ResponseTransport transport, Stream* serial, uint32_t requestId) {
+  uint32_t freeBytes = 0;
+  if (!getFreeBytes(freeBytes)) {
+    sendError(transport, serial, requestId, data_logger::lastError());
     return;
   }
-  if (data_logger::isLogging()) {
-    char response[96] = {0};
+
+  char response[app_config::kBleControlResponseBufferSize] = {0};
+  switch (recordingMachine.state()) {
+    case activity_state::RecordingState::Idle: {
+      data_logger::LogFileInfo last = {};
+      if (data_logger::getLastCompletedSession(last)) {
+        char crcText[9] = {0};
+        crc32::format(last.crc32, crcText);
+        snprintf(
+            response,
+            sizeof(response),
+            "status,%lu,idle,%s,%lu,%s,%lu",
+            static_cast<unsigned long>(requestId),
+            last.name,
+            static_cast<unsigned long>(last.sizeBytes),
+            crcText,
+            static_cast<unsigned long>(freeBytes));
+      } else {
+        snprintf(
+            response,
+            sizeof(response),
+            "status,%lu,idle,none,0,none,%lu",
+            static_cast<unsigned long>(requestId),
+            static_cast<unsigned long>(freeBytes));
+      }
+      break;
+    }
+    case activity_state::RecordingState::Recording:
+      snprintf(
+          response,
+          sizeof(response),
+          "status,%lu,recording,%s,%s,%lu,%lu,%lu",
+          static_cast<unsigned long>(requestId),
+          data_logger::currentLabel(),
+          data_logger::currentLogPath(),
+          static_cast<unsigned long>(millis() - recordingStartedAtMs),
+          static_cast<unsigned long>(data_logger::currentBytesWritten()),
+          static_cast<unsigned long>(freeBytes));
+      break;
+    case activity_state::RecordingState::Fault:
+      snprintf(
+          response,
+          sizeof(response),
+          "status,%lu,fault,%s,%s,%lu",
+          static_cast<unsigned long>(requestId),
+          recordingFault[0] ? recordingFault : "recording_failed",
+          data_logger::currentLogPath()[0] ? data_logger::currentLogPath() : "none",
+          static_cast<unsigned long>(freeBytes));
+      break;
+  }
+  sendResponse(transport, serial, response);
+  if (transport == ResponseTransport::Ble) {
+    ble_service::requestTelemetry();
+  }
+}
+
+void handleRecordStart(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  const activity_state::RecordStartDecision decision = activity_state::decideRecordStart(
+      recordingMachine.state(), data_logger::currentLabel(), command.label);
+  if (decision == activity_state::RecordStartDecision::Fault) {
+    sendError(transport, serial, command.requestId, "fault_requires_restart");
+    return;
+  }
+  if (decision == activity_state::RecordStartDecision::Conflict) {
+    sendError(transport, serial, command.requestId, "already_recording");
+    return;
+  }
+  if (decision == activity_state::RecordStartDecision::Replay) {
+    char response[128] = {0};
     snprintf(
         response,
         sizeof(response),
-        "ok,logging_already_running,%s",
-        protocolFileName(data_logger::currentLogPath()));
-    ble_service::sendControlResponse(response);
+        "ok,%lu,already_recording,%s,%s",
+        static_cast<unsigned long>(command.requestId),
+        command.label,
+        data_logger::currentLogPath());
+    sendResponse(transport, serial, response);
     return;
   }
-  if (!startLoggingSession()) {
-    sendBleError(data_logger::lastError());
+  if (ble_service::isFileOperationActive()) {
+    sendError(transport, serial, command.requestId, "file_operation_busy");
     return;
   }
-
-  char response[96] = {0};
+  if (!data_logger::startSession(command.label)) {
+    copyFault(data_logger::lastError());
+    sendError(transport, serial, command.requestId, recordingFault);
+    return;
+  }
+  if (!recordingMachine.begin()) {
+    copyFault("recording_state_error");
+    sendError(transport, serial, command.requestId, recordingFault);
+    return;
+  }
+  resetSamplingRuntime();
+  char response[128] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,logging_started,%s",
-      protocolFileName(data_logger::currentLogPath()));
-  ble_service::sendControlResponse(response);
+      "ok,%lu,recording_started,%s,%s",
+      static_cast<unsigned long>(command.requestId),
+      command.label,
+      data_logger::currentLogPath());
+  sendResponse(transport, serial, response);
 }
 
-void handleBleStop() {
-  if (!data_logger::isLogging()) {
-    ble_service::sendControlResponse("ok,logging_already_stopped");
+void handleRecordStop(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  if (recordingMachine.state() == activity_state::RecordingState::Fault) {
+    sendError(
+        transport,
+        serial,
+        command.requestId,
+        recordingFault[0] ? recordingFault : "recording_failed");
     return;
   }
-
-  char fileName[64] = {0};
-  strncpy(fileName, protocolFileName(data_logger::currentLogPath()), sizeof(fileName) - 1);
-  stopLoggingSession();
+  if (recordingMachine.state() == activity_state::RecordingState::Idle) {
+    data_logger::LogFileInfo last = {};
+    char response[160] = {0};
+    if (data_logger::getLastCompletedSession(last)) {
+      char crcText[9] = {0};
+      crc32::format(last.crc32, crcText);
+      snprintf(
+          response,
+          sizeof(response),
+          "ok,%lu,already_stopped,%s,%lu,%s",
+          static_cast<unsigned long>(command.requestId),
+          last.name,
+          static_cast<unsigned long>(last.sizeBytes),
+          crcText);
+    } else {
+      snprintf(
+          response,
+          sizeof(response),
+          "ok,%lu,already_stopped,none,0,none",
+          static_cast<unsigned long>(command.requestId));
+    }
+    sendResponse(transport, serial, response);
+    return;
+  }
 
   data_logger::LogFileInfo info = {};
-  if (!data_logger::getLogFileInfo(fileName, info)) {
-    sendBleError(data_logger::lastError());
+  if (!data_logger::stopSession(info)) {
+    copyFault(data_logger::lastError());
+    sendError(transport, serial, command.requestId, recordingFault);
     return;
   }
-
-  char response[app_config::kBleControlResponseBufferSize] = {0};
+  if (!recordingMachine.complete()) {
+    copyFault("recording_state_error");
+    sendError(transport, serial, command.requestId, recordingFault);
+    return;
+  }
+  setLed(false);
+  char crcText[9] = {0};
+  crc32::format(info.crc32, crcText);
+  char response[160] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,logging_stopped,%s,%lu",
+      "ok,%lu,recording_stopped,%s,%lu,%s",
+      static_cast<unsigned long>(command.requestId),
       info.name,
-      static_cast<unsigned long>(info.sizeBytes));
-  ble_service::sendControlResponse(response);
+      static_cast<unsigned long>(info.sizeBytes),
+      crcText);
+  sendResponse(transport, serial, response);
 }
 
-void handleBleDownload(char* arguments) {
-  char* separator = strchr(arguments, ' ');
-  if (!separator) {
-    sendBleError("download_usage");
+void handleSerialList(Stream& serial, uint32_t requestId) {
+  if (!data_logger::beginLogList()) {
+    sendError(ResponseTransport::Serial, &serial, requestId, data_logger::lastError());
     return;
   }
-  *separator = '\0';
-  const char* fileName = arguments;
-  const char* offsetText = separator + 1;
-  char* end = nullptr;
-  const unsigned long parsedOffset = strtoul(offsetText, &end, 10);
-  if (offsetText[0] == '\0' || !end || end[0] != '\0') {
-    sendBleError("invalid_offset");
-    return;
-  }
-  if (data_logger::isLogging()) {
-    sendBleError("logging_active");
-    return;
-  }
-  if (ble_service::isFileOperationActive()) {
-    sendBleError("file_operation_busy");
-    return;
-  }
-  if (!ble_service::startFileTransfer(fileName, static_cast<uint32_t>(parsedOffset))) {
-    sendBleError(data_logger::lastError());
-  }
-}
-
-void handleBleDelete(const char* fileName) {
-  if (ble_service::isFileOperationActive()) {
-    sendBleError("file_operation_busy");
-    return;
-  }
-  if (!data_logger::deleteLogFile(fileName)) {
-    sendBleError(data_logger::lastError());
-    return;
-  }
-
-  char response[96] = {0};
-  snprintf(response, sizeof(response), "ok,deleted,%s", fileName);
-  ble_service::sendControlResponse(response);
-}
-
-void handleBleCommand(char* command) {
-  while (*command == ' ') {
-    ++command;
-  }
-
-  if (strcmp(command, "status") == 0) {
-    sendBleStatus();
-  } else if (strcmp(command, "start") == 0) {
-    handleBleStart();
-  } else if (strcmp(command, "stop") == 0) {
-    handleBleStop();
-  } else if (strcmp(command, "list") == 0) {
-    if (!ble_service::startLogList()) {
-      sendBleError(ble_service::isFileOperationActive() ? "file_operation_busy" : data_logger::lastError());
+  uint32_t count = 0;
+  while (true) {
+    data_logger::LogFileInfo info = {};
+    const data_logger::ListResult result = data_logger::nextLogFile(info);
+    if (result == data_logger::ListResult::End) {
+      break;
     }
-  } else if (strcmp(command, "cancel") == 0) {
-    ble_service::cancelFileOperation();
-    ble_service::sendControlResponse("ok,cancelled");
-  } else if (strncmp(command, "label ", 6) == 0) {
-    const char* error = updateActivityLabel(command + 6);
-    if (error) {
-      sendBleError(error);
+    if (result == data_logger::ListResult::Error) {
+      data_logger::endLogList();
+      sendError(ResponseTransport::Serial, &serial, requestId, data_logger::lastError());
       return;
     }
-    char response[64] = {0};
-    snprintf(response, sizeof(response), "ok,label,%s", activityLabel);
-    ble_service::sendControlResponse(response);
-  } else if (strncmp(command, "download ", 9) == 0) {
-    handleBleDownload(command + 9);
-  } else if (strncmp(command, "delete ", 7) == 0) {
-    handleBleDelete(command + 7);
-  } else {
-    sendBleError("unknown_command");
+    char crcText[9] = {0};
+    if (info.hasCrc) {
+      crc32::format(info.crc32, crcText);
+    }
+    char response[app_config::kBleControlResponseBufferSize] = {0};
+    snprintf(
+        response,
+        sizeof(response),
+        "file,%lu,%s,%lu,%s,%s",
+        static_cast<unsigned long>(requestId),
+        info.name,
+        static_cast<unsigned long>(info.sizeBytes),
+        info.hasCrc ? crcText : "none",
+        info.complete ? "complete" : "incomplete");
+    serial.println(response);
+    ++count;
   }
+  data_logger::endLogList();
+  char response[64] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "list_end,%lu,%lu",
+      static_cast<unsigned long>(requestId),
+      static_cast<unsigned long>(count));
+  serial.println(response);
+}
+
+void handleList(ResponseTransport transport, Stream* serial, uint32_t requestId) {
+  if (ble_service::isFileOperationActive()) {
+    sendError(transport, serial, requestId, "file_operation_busy");
+    return;
+  }
+  if (transport == ResponseTransport::Serial) {
+    handleSerialList(*serial, requestId);
+    return;
+  }
+  if (!ble_service::startLogList(requestId)) {
+    sendError(transport, serial, requestId, ble_service::lastError());
+  }
+}
+
+void handleDownload(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  if (transport == ResponseTransport::Serial) {
+    sendError(transport, serial, command.requestId, "ble_required");
+    return;
+  }
+  if (!ble_service::startFileTransfer(command.requestId, command.name, command.offset)) {
+    sendError(transport, serial, command.requestId, ble_service::lastError());
+  }
+}
+
+void handleDelete(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  if (ble_service::isFileOperationActive()) {
+    sendError(transport, serial, command.requestId, "file_operation_busy");
+    return;
+  }
+  const data_logger::DeleteResult result =
+      data_logger::deleteLogFile(command.name, command.sizeBytes, command.crc32);
+  if (result == data_logger::DeleteResult::Error) {
+    sendError(transport, serial, command.requestId, data_logger::lastError());
+    return;
+  }
+  char response[128] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,%lu,%s,%s",
+      static_cast<unsigned long>(command.requestId),
+      result == data_logger::DeleteResult::Deleted ? "deleted" : "already_deleted",
+      command.name);
+  sendResponse(transport, serial, response);
+}
+
+void dispatchCommand(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  if (recordingMachine.state() == activity_state::RecordingState::Recording &&
+      command.type != protocol_v3::CommandType::Hello &&
+      command.type != protocol_v3::CommandType::Status &&
+      command.type != protocol_v3::CommandType::RecordStart &&
+      command.type != protocol_v3::CommandType::RecordStop) {
+    sendError(transport, serial, command.requestId, "busy_recording");
+    return;
+  }
+  if (recordingMachine.state() == activity_state::RecordingState::Fault &&
+      command.type != protocol_v3::CommandType::Hello &&
+      command.type != protocol_v3::CommandType::Status &&
+      command.type != protocol_v3::CommandType::RecordStop) {
+    sendError(transport, serial, command.requestId, "fault_requires_restart");
+    return;
+  }
+
+  switch (command.type) {
+    case protocol_v3::CommandType::Hello:
+      sendHello(transport, serial, command.requestId);
+      break;
+    case protocol_v3::CommandType::Status:
+      sendStatus(transport, serial, command.requestId);
+      break;
+    case protocol_v3::CommandType::RecordStart:
+      handleRecordStart(transport, serial, command);
+      break;
+    case protocol_v3::CommandType::RecordStop:
+      handleRecordStop(transport, serial, command);
+      break;
+    case protocol_v3::CommandType::List:
+      handleList(transport, serial, command.requestId);
+      break;
+    case protocol_v3::CommandType::Download:
+      handleDownload(transport, serial, command);
+      break;
+    case protocol_v3::CommandType::Cancel:
+      ble_service::cancelFileOperation();
+      {
+        char response[64] = {0};
+        snprintf(
+            response,
+            sizeof(response),
+            "ok,%lu,cancelled",
+            static_cast<unsigned long>(command.requestId));
+        sendResponse(transport, serial, response);
+      }
+      break;
+    case protocol_v3::CommandType::Delete:
+      handleDelete(transport, serial, command);
+      break;
+    case protocol_v3::CommandType::Invalid:
+      sendError(transport, serial, command.requestId, "invalid_command");
+      break;
+  }
+}
+
+void parseAndDispatch(ResponseTransport transport, Stream* serial, const char* line) {
+  protocol_v3::Command command = {};
+  const protocol_v3::ParseResult result = protocol_v3::parseCommand(line, command);
+  if (!result.ok) {
+    sendError(transport, serial, result.requestId, result.errorCode);
+    return;
+  }
+  dispatchCommand(transport, serial, command);
 }
 
 void serviceBleCommands() {
   char command[app_config::kBleCommandBufferSize] = {0};
   if (ble_service::takeCommand(command, sizeof(command))) {
-    handleBleCommand(command);
+    parseAndDispatch(ResponseTransport::Ble, nullptr, command);
   }
 }
 
-void eraseLogs(Stream& serial) {
-  // Erase only clears managed files. Logging stays stopped until start is called explicitly.
-  if (!data_logger::eraseLogs()) {
-    serial.print("error,erase_failed,");
-    serial.println(data_logger::lastError());
-    return;
-  }
-
-  resetLoggingRuntime();
-  serial.println("ok,erase_completed");
+void printHelp(Stream& serial) {
+  serial.println("BLE protocol v3 commands are also accepted over serial:");
+  serial.println("hello,<id> | status,<id> | record_start,<id>,<label> | record_stop,<id>");
+  serial.println("list,<id> | delete,<id>,<name>,<size>,<CRC32> | cancel,<id>");
+  serial.println("diagnostics: help | stream on | stream off");
 }
 
-void handleCommand(char* command, Stream& serial) {
-  while (*command == ' ') {
-    ++command;
-  }
-
-  if (*command == '\0') {
+void handleSerialCommand(char* command, Stream& serial) {
+  if (!command || command[0] == '\0') {
     return;
   }
-
-  // This block is the command router. Each recognized text command maps
-  // to one action in the firmware.
   if (strcmp(command, "help") == 0) {
     printHelp(serial);
     return;
   }
-
-  if (strcmp(command, "status") == 0) {
-    printStatus(serial);
-    return;
-  }
-
-  if (strcmp(command, "battery") == 0) {
-    printBatteryStatus(serial);
-    return;
-  }
-
-  // space: prints total, used and free bytes on external flash plus usage percent.
-  if (strcmp(command, "space") == 0) {
-    printStorageSpace(serial);
-    return;
-  }
-
-  // list: prints files currently stored in the external flash filesystem.
-  if (strcmp(command, "list") == 0) {
-    data_logger::listFiles(serial);
-    return;
-  }
-
-  // stop: stops appending samples to flash.
-  if (strcmp(command, "stop") == 0) {
-    stopLogging(serial);
-    return;
-  }
-
-  // start: creates a new CSV session and resumes logging.
-  if (strcmp(command, "start") == 0) {
-    startLogging(serial);
-    return;
-  }
-
-  // erase: deletes saved logs without automatically starting a new session.
-  if (strcmp(command, "erase") == 0) {
-    eraseLogs(serial);
-    return;
-  }
-
-  // label <name>: sets the label used for the next session and CSV rows.
-  if (strncmp(command, "label ", 6) == 0) {
-    setActivityLabel(command + 6, serial);
-    return;
-  }
-
-  // stream on/off controls whether new samples are mirrored live to USB serial.
   if (strcmp(command, "stream on") == 0) {
     serialStreaming = true;
     serial.println("ok,stream,on");
     return;
   }
-
   if (strcmp(command, "stream off") == 0) {
     serialStreaming = false;
     serial.println("ok,stream,off");
     return;
   }
+  parseAndDispatch(ResponseTransport::Serial, &serial, command);
+}
 
-  // read <file>: dumps one stored file back over serial.
-  if (strncmp(command, "read ", 5) == 0) {
-    const char* path = command + 5;
-    if (!data_logger::readFileToStream(path, serial)) {
-      serial.print("error,file_not_found,");
-      serial.println(path);
-      return;
-    }
-    serial.print("read_end,");
-    serial.println(path);
+void reportRecordingFaultIfNeeded() {
+  if (recordingMachine.state() != activity_state::RecordingState::Fault) {
     return;
   }
+  if (!serialFaultReported && Serial) {
+    Serial.print("error,0,");
+    Serial.println(recordingFault);
+    serialFaultReported = true;
+  }
 
-  serial.print("error,unknown_command,");
-  serial.println(command);
+  const bool connected = ble_service::isConnected();
+  if (!connected) {
+    // A future connection must receive the fault even if it was already queued
+    // successfully for an earlier peer.
+    faultBleWasConnected = false;
+    bleFaultReported = false;
+    return;
+  }
+  if (!faultBleWasConnected) {
+    faultBleWasConnected = true;
+    bleFaultReported = false;
+  }
+  if (!bleFaultReported && !ble_service::hasPendingControlResponse()) {
+    char response[128] = {0};
+    snprintf(response, sizeof(response), "error,0,%s", recordingFault);
+    if (ble_service::sendControlResponse(response)) {
+      bleFaultReported = true;
+    }
+  }
 }
 }
 
@@ -485,24 +535,21 @@ namespace app {
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   setLed(false);
-  resetActivityLabel();
+  recordingMachine.reset();
+  recordingFault[0] = '\0';
 
   Serial.begin(app_config::kSerialBaud);
   waitForSerial(1200);
   battery_reader::begin();
-
   if (!imu_reader::begin()) {
     handleFatalError("error,imu_init_failed");
   }
-
   if (!data_logger::begin()) {
     handleFatalError("error,storage_mount_failed");
   }
 
-  data_logger::loadSavedLabel(activityLabel, sizeof(activityLabel));
-  data_logger::clearError();
-
   const bool bleReady = ble_service::begin();
+  resetSamplingRuntime();
   if (Serial) {
     if (bleReady) {
       Serial.print("info,ble_advertising,");
@@ -510,33 +557,20 @@ void setup() {
     } else {
       Serial.println("warn,ble_init_failed");
     }
-  }
-
-  resetLoggingRuntime();
-
-  if (Serial) {
-    Serial.print("info,logging,waiting_for_start,label,");
-    Serial.println(activityLabel);
+    Serial.println("info,recording,idle");
     printHelp(Serial);
   }
 }
 
 void loop() {
   if (Serial) {
-    serial_console::service(Serial, handleCommand);
+    serial_console::service(Serial, handleSerialCommand);
   }
-
   ble_service::service();
   serviceBleCommands();
 
-  // If logging is disabled, the board stays alive in service mode so you can
-  // still use commands like status/list/read/erase/start to recover.
-  if (!data_logger::isLogging()) {
-    if (Serial && !writeFailureReported && strcmp(data_logger::lastError(), "none") != 0) {
-      Serial.print("warn,logging_disabled,");
-      Serial.println(data_logger::lastError());
-      writeFailureReported = true;
-    }
+  if (recordingMachine.state() != activity_state::RecordingState::Recording) {
+    reportRecordingFaultIfNeeded();
     delay(10);
     return;
   }
@@ -545,23 +579,21 @@ void loop() {
   if (static_cast<int32_t>(now - nextSampleMs) < 0) {
     return;
   }
-
-  // nextSampleMs keeps sampling on a regular schedule instead of drifting
-  // because of processing time in loop().
   nextSampleMs += app_config::kSampleIntervalMs;
-
-  const IMUSample sample = imu_reader::readSample(sampleId++, millis());
-  if (!data_logger::writeSample(sample, activityLabel, serialStreaming, Serial)) {
-    writeFailureReported = false;
+  const IMUSample sample = imu_reader::readSample(sampleId++, now);
+  if (!data_logger::writeSample(sample, data_logger::currentLabel(), serialStreaming, Serial)) {
+    copyFault(data_logger::lastError());
+    reportRecordingFaultIfNeeded();
     return;
   }
-
   if ((sample.sampleId + 1) % app_config::kLedPulseEverySamples == 0) {
     setLed(true);
     delay(app_config::kLedPulseDurationMs);
     setLed(false);
   }
-
-  data_logger::flushIfNeeded();
+  if (!data_logger::flushIfNeeded()) {
+    copyFault(data_logger::lastError());
+    reportRecordingFaultIfNeeded();
+  }
 }
 }

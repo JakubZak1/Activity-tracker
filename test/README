@@ -1,11 +1,22 @@
-This directory is intended for automated tests and test-related files.
+Firmware host tests
+===================
 
-The current project is still focused on embedded bring-up, IMU logging, and storage validation, so there are no PlatformIO tests here yet.
+`test_native_protocol/test_main.cpp` contains Unity tests for the pure C++
+parts of BLE dataset protocol v3:
 
-Good future candidates for tests include:
-- CSV line formatting logic
-- command parsing behavior
-- storage statistics calculations
-- feature extraction helpers for activity classification
+- the IEEE CRC-32 known vector and incremental calculation;
+- fragmented newline-delimited command assembly and overflow rejection;
+- command, label, filename, uint32, uppercase-CRC, and sidecar-metadata parsing;
+- the recording and file-operation state-machine primitives.
 
-When the firmware grows further, this directory should hold unit or integration tests that can be run with PlatformIO Test Runner.
+Run the Unity host suite with:
+
+    pio test -e native_protocol_tests
+
+On Windows the native environment needs the MSYS2 UCRT64 GCC directory at
+`C:\msys64\ucrt64\bin` first in `PATH`.
+
+These host tests do not exercise Arduino, Bluefruit, the physical BLE link,
+QSPI/FAT operations, IMU sampling, or power-loss behavior. See
+`../docs/testing_without_hardware.md` for all software gates and the later hardware
+acceptance matrix.

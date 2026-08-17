@@ -7,25 +7,19 @@
 
 #include "app_config.h"
 #include "battery_reader.h"
+#include "crc32.h"
 #include "data_logger.h"
+#include "protocol_v3.h"
 
 namespace {
 constexpr char kServiceUuid[] = "7b7d0000-8f7a-4f6a-9f4f-1d2c3b4a5000";
 constexpr char kCurrentActivityUuid[] = "7b7d0001-8f7a-4f6a-9f4f-1d2c3b4a5000";
-constexpr char kBatteryUuid[] = "7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000";
-constexpr char kSummaryUuid[] = "7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000";
+constexpr char kSummaryUuid[] = "7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000";
+constexpr char kBatteryUuid[] = "7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000";
 constexpr char kCommandUuid[] = "7b7d0004-8f7a-4f6a-9f4f-1d2c3b4a5000";
 constexpr char kControlResponseUuid[] = "7b7d0005-8f7a-4f6a-9f4f-1d2c3b4a5000";
 constexpr char kFileDataUuid[] = "7b7d0006-8f7a-4f6a-9f4f-1d2c3b4a5000";
-constexpr uint16_t kFileFrameHeaderSize = 4;
-
-enum class FileOperation : uint8_t {
-  Idle,
-  Listing,
-  WaitingDownloadBegin,
-  Transferring,
-  WaitingDownloadEnd,
-};
+constexpr uint16_t kFileFrameHeaderSize = 8;
 
 enum class ControlAction : uint8_t {
   None,
@@ -36,8 +30,8 @@ enum class ControlAction : uint8_t {
 
 BLEService activityService(kServiceUuid);
 BLECharacteristic currentActivityCharacteristic(kCurrentActivityUuid);
-BLECharacteristic batteryCharacteristic(kBatteryUuid);
 BLECharacteristic summaryCharacteristic(kSummaryUuid);
+BLECharacteristic batteryCharacteristic(kBatteryUuid);
 BLECharacteristic commandCharacteristic(kCommandUuid);
 BLECharacteristic controlResponseCharacteristic(kControlResponseUuid);
 BLECharacteristic fileDataCharacteristic(kFileDataUuid);
@@ -45,26 +39,94 @@ BLECharacteristic fileDataCharacteristic(kFileDataUuid);
 bool initialized = false;
 volatile bool telemetryRequested = false;
 volatile bool disconnectRequested = false;
-volatile bool commandPending = false;
-volatile bool commandOverflow = false;
-char receivedCommand[app_config::kBleCommandBufferSize] = {0};
+volatile bool connectionResetRequested = false;
+volatile uint16_t connectionResetHandle = BLE_CONN_HANDLE_INVALID;
+protocol_v3::LineAssembler commandAssembler;
+SemaphoreHandle_t commandAssemblerMutex = nullptr;
 
 char pendingControlResponse[app_config::kBleControlResponseBufferSize] = {0};
 uint16_t pendingControlLength = 0;
+uint16_t pendingControlOffset = 0;
+uint32_t pendingControlStartedMs = 0;
 ControlAction pendingControlAction = ControlAction::None;
+volatile bool controlIndicationConfirmed = false;
+volatile bool controlIndicationFailed = false;
+bool controlIndicationInFlight = false;
+uint16_t controlIndicationChunkLength = 0;
+bool yieldFileServiceOnce = false;
 
-FileOperation fileOperation = FileOperation::Idle;
-uint16_t listedFileCount = 0;
+activity_state::FileOperationMachine fileOperationMachine;
+uint32_t fileOperationRequestId = 0;
+uint32_t fileOperationLastProgressMs = 0;
+uint32_t listedFileCount = 0;
 char transferFileName[64] = {0};
 uint32_t transferFileSize = 0;
+uint32_t transferFileCrc = 0;
 uint32_t transferOffset = 0;
 uint8_t fileFrame[app_config::kBleFileFrameSize] = {0};
 uint16_t fileFrameLength = 0;
 uint16_t fileFrameDataLength = 0;
+char transportError[64] = {0};
 
 uint32_t startedAtMs = 0;
 uint32_t nextTelemetryMs = 0;
 uint32_t nextBatteryMs = 0;
+
+void setTransportError(const char* error) {
+  strncpy(transportError, error ? error : "unknown", sizeof(transportError) - 1);
+  transportError[sizeof(transportError) - 1] = '\0';
+}
+
+void clearTransportError() {
+  transportError[0] = '\0';
+}
+
+void requestConnectionReset(uint16_t connectionHandle) {
+  if (connectionHandle == BLE_CONN_HANDLE_INVALID) {
+    return;
+  }
+  connectionResetHandle = connectionHandle;
+  connectionResetRequested = true;
+}
+
+void resetCommandAssembler() {
+  if (!commandAssemblerMutex) {
+    commandAssembler.reset();
+    return;
+  }
+  if (xSemaphoreTake(commandAssemblerMutex, portMAX_DELAY) == pdTRUE) {
+    commandAssembler.reset();
+    xSemaphoreGive(commandAssemblerMutex);
+  }
+}
+
+void pushCommandBytes(const uint8_t* data, size_t length) {
+  if (!commandAssemblerMutex) {
+    return;
+  }
+  if (xSemaphoreTake(commandAssemblerMutex, portMAX_DELAY) == pdTRUE) {
+    commandAssembler.push(data, length);
+    xSemaphoreGive(commandAssemblerMutex);
+  }
+}
+
+bool takeAssembledCommand(char* output, size_t outputSize) {
+  if (!commandAssemblerMutex || xSemaphoreTake(commandAssemblerMutex, portMAX_DELAY) != pdTRUE) {
+    return false;
+  }
+  const bool available = commandAssembler.takeLine(output, outputSize);
+  xSemaphoreGive(commandAssemblerMutex);
+  return available;
+}
+
+bool takeCommandOverflow() {
+  if (!commandAssemblerMutex || xSemaphoreTake(commandAssemblerMutex, portMAX_DELAY) != pdTRUE) {
+    return false;
+  }
+  const bool overflow = commandAssembler.takeOverflow();
+  xSemaphoreGive(commandAssemblerMutex);
+  return overflow;
+}
 
 void writeAndNotify(BLECharacteristic& characteristic, const char* payload) {
   characteristic.write(payload);
@@ -93,40 +155,79 @@ void publishSummary() {
 
 void publishTelemetry() {
   publishActivity();
-  publishBattery();
   publishSummary();
+  publishBattery();
+}
+
+uint16_t currentAttPayloadCapacity() {
+  BLEConnection* connection = Bluefruit.Connection(Bluefruit.connHandle());
+  const uint16_t mtu = connection ? connection->getMtu() : BLE_GATT_ATT_MTU_DEFAULT;
+  return mtu > 3 ? mtu - 3 : 0;
+}
+
+void clearControlResponse() {
+  pendingControlResponse[0] = '\0';
+  pendingControlLength = 0;
+  pendingControlOffset = 0;
+  pendingControlStartedMs = 0;
+  pendingControlAction = ControlAction::None;
+  controlIndicationConfirmed = false;
+  controlIndicationFailed = false;
+  controlIndicationInFlight = false;
+  controlIndicationChunkLength = 0;
 }
 
 bool queueControlResponse(const char* response, ControlAction action = ControlAction::None) {
-  if (!response || pendingControlLength != 0) {
+  clearTransportError();
+  if (!response || pendingControlLength != 0 || !Bluefruit.connected() ||
+      !controlResponseCharacteristic.indicateEnabled()) {
+    setTransportError(
+        pendingControlLength != 0
+            ? "control_response_busy"
+            : (!Bluefruit.connected() ? "not_connected" : "control_indications_required"));
     return false;
   }
-
   const int written = snprintf(pendingControlResponse, sizeof(pendingControlResponse), "%s\n", response);
   if (written <= 0 || written >= static_cast<int>(sizeof(pendingControlResponse))) {
+    clearControlResponse();
+    setTransportError("control_response_too_long");
     return false;
   }
-
   pendingControlLength = static_cast<uint16_t>(written);
+  pendingControlOffset = 0;
+  pendingControlStartedMs = millis();
   pendingControlAction = action;
+  controlResponseCharacteristic.write(pendingControlResponse, pendingControlLength);
   return true;
+}
+
+void resetFileOperationState() {
+  data_logger::endFileRead();
+  data_logger::endLogList();
+  fileOperationMachine.reset();
+  fileOperationRequestId = 0;
+  fileOperationLastProgressMs = 0;
+  listedFileCount = 0;
+  transferFileName[0] = '\0';
+  transferFileSize = 0;
+  transferFileCrc = 0;
+  transferOffset = 0;
+  fileFrameLength = 0;
+  fileFrameDataLength = 0;
+  yieldFileServiceOnce = false;
 }
 
 void finishControlAction(ControlAction action) {
   switch (action) {
     case ControlAction::BeginTransfer:
-      fileOperation = FileOperation::Transferring;
+      fileOperationMachine.transition(
+          activity_state::FileOperation::WaitingDownloadBegin,
+          activity_state::FileOperation::Downloading);
+      fileOperationLastProgressMs = millis();
       break;
     case ControlAction::EndTransfer:
-      fileOperation = FileOperation::Idle;
-      transferFileName[0] = '\0';
-      transferFileSize = 0;
-      transferOffset = 0;
-      break;
     case ControlAction::EndList:
-      data_logger::endLogList();
-      fileOperation = FileOperation::Idle;
-      listedFileCount = 0;
+      resetFileOperationState();
       break;
     case ControlAction::None:
       break;
@@ -134,81 +235,144 @@ void finishControlAction(ControlAction action) {
 }
 
 void flushControlResponse() {
-  if (pendingControlLength == 0 || !Bluefruit.connected() || !controlResponseCharacteristic.notifyEnabled()) {
+  if (pendingControlLength == 0 || !Bluefruit.connected() || !controlResponseCharacteristic.indicateEnabled()) {
     return;
   }
 
-  controlResponseCharacteristic.write(pendingControlResponse, pendingControlLength);
-  if (!controlResponseCharacteristic.notify(pendingControlResponse, pendingControlLength)) {
+  if (controlIndicationFailed) {
+    controlIndicationFailed = false;
+    controlIndicationInFlight = false;
+    controlIndicationChunkLength = 0;
+  }
+  if (controlIndicationConfirmed) {
+    controlIndicationConfirmed = false;
+    if (controlIndicationInFlight) {
+      pendingControlOffset += controlIndicationChunkLength;
+      controlIndicationInFlight = false;
+      controlIndicationChunkLength = 0;
+      if (fileOperationMachine.active()) {
+        fileOperationLastProgressMs = millis();
+      }
+      if (pendingControlOffset >= pendingControlLength) {
+        const ControlAction completedAction = pendingControlAction;
+        clearControlResponse();
+        finishControlAction(completedAction);
+        if (fileOperationMachine.active()) {
+          yieldFileServiceOnce = true;
+        }
+        return;
+      }
+    }
+  }
+  if (controlIndicationInFlight) {
     return;
   }
 
-  const ControlAction completedAction = pendingControlAction;
-  pendingControlLength = 0;
-  pendingControlResponse[0] = '\0';
-  pendingControlAction = ControlAction::None;
-  finishControlAction(completedAction);
+  const uint16_t capacity = currentAttPayloadCapacity();
+  if (capacity == 0) {
+    return;
+  }
+  const uint16_t remaining = pendingControlLength - pendingControlOffset;
+  const uint16_t chunkLength = remaining < capacity ? remaining : capacity;
+  uint16_t submittedLength = chunkLength;
+  ble_gatts_hvx_params_t parameters = {
+      .handle = controlResponseCharacteristic.handles().value_handle,
+      .type = BLE_GATT_HVX_INDICATION,
+      .offset = 0,
+      .p_len = &submittedLength,
+      .p_data = reinterpret_cast<uint8_t*>(pendingControlResponse + pendingControlOffset),
+  };
+  const uint32_t status = sd_ble_gatts_hvx(Bluefruit.connHandle(), &parameters);
+  if (status == NRF_ERROR_TIMEOUT) {
+    requestConnectionReset(Bluefruit.connHandle());
+    return;
+  }
+  if (status != NRF_SUCCESS || submittedLength == 0) {
+    return;
+  }
+  controlIndicationChunkLength = submittedLength;
+  controlIndicationInFlight = true;
+}
+
+void queueOperationError(uint32_t requestId, const char* error) {
+  char response[128] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "error,%lu,%s",
+      static_cast<unsigned long>(requestId),
+      error ? error : "operation_failed");
+  queueControlResponse(response);
+}
+
+void failFileOperation(const char* error) {
+  const uint32_t requestId = fileOperationRequestId;
+  clearControlResponse();
+  resetFileOperationState();
+  queueOperationError(requestId, error);
 }
 
 void serviceLogList() {
-  if (fileOperation != FileOperation::Listing || pendingControlLength != 0) {
+  if (fileOperationMachine.state() != activity_state::FileOperation::Listing || pendingControlLength != 0) {
     return;
   }
-
   data_logger::LogFileInfo info = {};
-  if (data_logger::nextLogFile(info)) {
-    char response[app_config::kBleControlResponseBufferSize] = {0};
+  const data_logger::ListResult result = data_logger::nextLogFile(info);
+  if (result == data_logger::ListResult::Error) {
+    failFileOperation(data_logger::lastError());
+    return;
+  }
+  if (result == data_logger::ListResult::End) {
+    char response[64] = {0};
     snprintf(
         response,
         sizeof(response),
-        "file,%s,%lu,%s",
-        info.name,
-        static_cast<unsigned long>(info.sizeBytes),
-        info.active ? "active" : "closed");
-    if (queueControlResponse(response)) {
-      listedFileCount++;
+        "list_end,%lu,%lu",
+        static_cast<unsigned long>(fileOperationRequestId),
+        static_cast<unsigned long>(listedFileCount));
+    if (!queueControlResponse(response, ControlAction::EndList)) {
+      failFileOperation(transportError);
     }
     return;
   }
 
-  char response[48] = {0};
-  snprintf(response, sizeof(response), "list_end,%u", listedFileCount);
-  queueControlResponse(response, ControlAction::EndList);
+  char crcText[9] = {0};
+  if (info.hasCrc) {
+    crc32::format(info.crc32, crcText);
+  }
+  char response[app_config::kBleControlResponseBufferSize] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "file,%lu,%s,%lu,%s,%s",
+      static_cast<unsigned long>(fileOperationRequestId),
+      info.name,
+      static_cast<unsigned long>(info.sizeBytes),
+      info.hasCrc ? crcText : "none",
+      info.complete ? "complete" : "incomplete");
+  if (!queueControlResponse(response)) {
+    failFileOperation(transportError);
+    return;
+  }
+  ++listedFileCount;
 }
 
-uint16_t currentFileFrameCapacity() {
-  BLEConnection* connection = Bluefruit.Connection(Bluefruit.connHandle());
-  const uint16_t mtu = connection ? connection->getMtu() : BLE_GATT_ATT_MTU_DEFAULT;
-  const uint16_t notificationCapacity = mtu > 3 ? mtu - 3 : 0;
-  return min(static_cast<uint16_t>(sizeof(fileFrame)), notificationCapacity);
-}
-
-void writeOffsetHeader(uint32_t offset) {
-  fileFrame[0] = static_cast<uint8_t>(offset & 0xFF);
-  fileFrame[1] = static_cast<uint8_t>((offset >> 8) & 0xFF);
-  fileFrame[2] = static_cast<uint8_t>((offset >> 16) & 0xFF);
-  fileFrame[3] = static_cast<uint8_t>((offset >> 24) & 0xFF);
-}
-
-void failTransfer(const char* error) {
-  data_logger::endFileRead();
-  fileFrameLength = 0;
-  fileFrameDataLength = 0;
-  fileOperation = FileOperation::Idle;
-  char response[96] = {0};
-  snprintf(response, sizeof(response), "error,%s", error ? error : "file_read_failed");
-  queueControlResponse(response);
+void writeUint32Le(uint8_t* output, uint32_t value) {
+  output[0] = static_cast<uint8_t>(value & 0xFFU);
+  output[1] = static_cast<uint8_t>((value >> 8U) & 0xFFU);
+  output[2] = static_cast<uint8_t>((value >> 16U) & 0xFFU);
+  output[3] = static_cast<uint8_t>((value >> 24U) & 0xFFU);
 }
 
 void serviceFileTransfer() {
-  if (fileOperation != FileOperation::Transferring || pendingControlLength != 0 || !Bluefruit.connected() ||
-      !fileDataCharacteristic.notifyEnabled()) {
+  if (fileOperationMachine.state() != activity_state::FileOperation::Downloading || pendingControlLength != 0 ||
+      !Bluefruit.connected() || !fileDataCharacteristic.notifyEnabled()) {
     return;
   }
-
-  const uint16_t frameCapacity = currentFileFrameCapacity();
+  const uint16_t attCapacity = currentAttPayloadCapacity();
+  const uint16_t frameCapacity = attCapacity < sizeof(fileFrame) ? attCapacity : sizeof(fileFrame);
   if (frameCapacity <= kFileFrameHeaderSize) {
-    failTransfer("mtu_too_small");
+    failFileOperation("mtu_too_small");
     return;
   }
 
@@ -216,24 +380,33 @@ void serviceFileTransfer() {
     const uint16_t dataCapacity = frameCapacity - kFileFrameHeaderSize;
     const int bytesRead = data_logger::readFileChunk(fileFrame + kFileFrameHeaderSize, dataCapacity);
     if (bytesRead < 0) {
-      failTransfer(data_logger::lastError());
+      failFileOperation(data_logger::lastError());
       return;
     }
     if (bytesRead == 0) {
       data_logger::endFileRead();
-      fileOperation = FileOperation::WaitingDownloadEnd;
+      fileOperationMachine.transition(
+          activity_state::FileOperation::Downloading,
+          activity_state::FileOperation::WaitingDownloadEnd);
+      char crcText[9] = {0};
+      crc32::format(transferFileCrc, crcText);
       char response[app_config::kBleControlResponseBufferSize] = {0};
       snprintf(
           response,
           sizeof(response),
-          "download_end,%s,%lu",
+          "download_end,%lu,%s,%lu,%s",
+          static_cast<unsigned long>(fileOperationRequestId),
           transferFileName,
-          static_cast<unsigned long>(transferFileSize));
-      queueControlResponse(response, ControlAction::EndTransfer);
+          static_cast<unsigned long>(transferFileSize),
+          crcText);
+      if (!queueControlResponse(response, ControlAction::EndTransfer)) {
+        failFileOperation(transportError);
+      }
       return;
     }
 
-    writeOffsetHeader(transferOffset);
+    writeUint32Le(fileFrame, fileOperationRequestId);
+    writeUint32Le(fileFrame + 4, transferOffset);
     fileFrameDataLength = static_cast<uint16_t>(bytesRead);
     fileFrameLength = kFileFrameHeaderSize + fileFrameDataLength;
   }
@@ -242,31 +415,41 @@ void serviceFileTransfer() {
     transferOffset += fileFrameDataLength;
     fileFrameLength = 0;
     fileFrameDataLength = 0;
+    fileOperationLastProgressMs = millis();
   }
 }
 
 void commandWritten(uint16_t connectionHandle, BLECharacteristic* characteristic, uint8_t* data, uint16_t length) {
-  (void)connectionHandle;
   (void)characteristic;
-
-  if (commandPending) {
-    commandOverflow = true;
+  if (!Bluefruit.connected() || connectionHandle != Bluefruit.connHandle()) {
     return;
   }
+  pushCommandBytes(data, length);
+}
 
-  size_t commandLength = min(static_cast<size_t>(length), sizeof(receivedCommand) - 1);
-  memcpy(receivedCommand, data, commandLength);
-  receivedCommand[commandLength] = '\0';
-  while (commandLength > 0 &&
-         (receivedCommand[commandLength - 1] == '\r' || receivedCommand[commandLength - 1] == '\n' ||
-          receivedCommand[commandLength - 1] == ' ')) {
-    receivedCommand[--commandLength] = '\0';
+void bleEvent(ble_evt_t* event) {
+  if (!event) {
+    return;
   }
-  commandPending = true;
+  if (event->header.evt_id == BLE_GATTS_EVT_HVC &&
+      event->evt.gatts_evt.params.hvc.handle == controlResponseCharacteristic.handles().value_handle) {
+    controlIndicationConfirmed = true;
+    return;
+  }
+  if (event->header.evt_id == BLE_GATTS_EVT_TIMEOUT || event->header.evt_id == BLE_GAP_EVT_DISCONNECTED) {
+    controlIndicationFailed = true;
+    if (event->header.evt_id == BLE_GATTS_EVT_TIMEOUT) {
+      requestConnectionReset(event->evt.gatts_evt.conn_handle);
+    }
+  }
 }
 
 void connected(uint16_t connectionHandle) {
   (void)connectionHandle;
+  connectionResetRequested = false;
+  connectionResetHandle = BLE_CONN_HANDLE_INVALID;
+  resetCommandAssembler();
+  clearControlResponse();
   telemetryRequested = true;
 }
 
@@ -285,20 +468,21 @@ void configureReadableNotifiableCharacteristic(BLECharacteristic& characteristic
 
 void configureGattService() {
   activityService.begin();
-
   configureReadableNotifiableCharacteristic(currentActivityCharacteristic, app_config::kBlePayloadBufferSize);
-  configureReadableNotifiableCharacteristic(batteryCharacteristic, app_config::kBlePayloadBufferSize);
   configureReadableNotifiableCharacteristic(summaryCharacteristic, app_config::kBlePayloadBufferSize);
-  configureReadableNotifiableCharacteristic(
-      controlResponseCharacteristic,
-      app_config::kBleControlResponseBufferSize);
+  configureReadableNotifiableCharacteristic(batteryCharacteristic, app_config::kBlePayloadBufferSize);
+
+  controlResponseCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_INDICATE);
+  controlResponseCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  controlResponseCharacteristic.setMaxLen(app_config::kBleControlResponseBufferSize);
+  controlResponseCharacteristic.begin();
 
   fileDataCharacteristic.setProperties(CHR_PROPS_NOTIFY);
   fileDataCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
   fileDataCharacteristic.setMaxLen(app_config::kBleFileFrameSize);
   fileDataCharacteristic.begin();
 
-  commandCharacteristic.setProperties(CHR_PROPS_WRITE | CHR_PROPS_WRITE_WO_RESP);
+  commandCharacteristic.setProperties(CHR_PROPS_WRITE);
   commandCharacteristic.setPermission(SECMODE_NO_ACCESS, SECMODE_OPEN);
   commandCharacteristic.setMaxLen(app_config::kBleCommandBufferSize);
   commandCharacteristic.setWriteCallback(commandWritten);
@@ -315,21 +499,48 @@ void startAdvertising() {
   Bluefruit.Advertising.setFastTimeout(30);
   Bluefruit.Advertising.start(0);
 }
+
+void serviceTimeouts() {
+  const uint32_t now = millis();
+  if (pendingControlLength != 0 && static_cast<uint32_t>(now - pendingControlStartedMs) >= app_config::kBleControlTimeoutMs) {
+    if (controlIndicationInFlight) {
+      // An indication cannot be cancelled in the SoftDevice. Reusing this
+      // connection could associate a late HVC with a newer response.
+      requestConnectionReset(Bluefruit.connHandle());
+      return;
+    }
+    clearControlResponse();
+    if (fileOperationMachine.active()) {
+      resetFileOperationState();
+    }
+  }
+  if (fileOperationMachine.active() && fileOperationLastProgressMs != 0 &&
+      static_cast<uint32_t>(now - fileOperationLastProgressMs) >= app_config::kBleFileOperationTimeoutMs) {
+    failFileOperation("operation_timeout");
+  }
+}
 }
 
 namespace ble_service {
 bool begin() {
+  if (!commandAssemblerMutex) {
+    commandAssemblerMutex = xSemaphoreCreateMutex();
+    if (!commandAssemblerMutex) {
+      setTransportError("ble_command_mutex_failed");
+      return false;
+    }
+  }
   Bluefruit.configPrphBandwidth(BANDWIDTH_MAX);
   if (!Bluefruit.begin(1, 0)) {
+    setTransportError("ble_begin_failed");
     return false;
   }
-
   Bluefruit.autoConnLed(false);
   Bluefruit.setTxPower(4);
   Bluefruit.setName(app_config::kBleDeviceName);
+  Bluefruit.setEventCallback(bleEvent);
   Bluefruit.Periph.setConnectCallback(connected);
   Bluefruit.Periph.setDisconnectCallback(disconnected);
-
   configureGattService();
   startAdvertising();
 
@@ -345,27 +556,40 @@ void service() {
   if (!initialized) {
     return;
   }
-
+  if (connectionResetRequested) {
+    const uint16_t handle = connectionResetHandle;
+    connectionResetRequested = false;
+    connectionResetHandle = BLE_CONN_HANDLE_INVALID;
+    resetCommandAssembler();
+    clearControlResponse();
+    resetFileOperationState();
+    if (Bluefruit.connected(handle)) {
+      Bluefruit.disconnect(handle);
+    }
+    return;
+  }
   if (disconnectRequested) {
     disconnectRequested = false;
-    cancelFileOperation();
-    pendingControlLength = 0;
-    pendingControlAction = ControlAction::None;
+    resetCommandAssembler();
+    clearControlResponse();
+    resetFileOperationState();
   }
-
-  if (commandOverflow && pendingControlLength == 0) {
-    commandOverflow = false;
-    queueControlResponse("error,command_busy");
-  }
-
   if (telemetryRequested) {
     telemetryRequested = false;
     publishTelemetry();
   }
+  if (takeCommandOverflow() && pendingControlLength == 0 && Bluefruit.connected()) {
+    queueControlResponse("error,0,control_record_too_long");
+  }
 
   flushControlResponse();
-  serviceLogList();
-  serviceFileTransfer();
+  if (yieldFileServiceOnce) {
+    yieldFileServiceOnce = false;
+  } else {
+    serviceLogList();
+    serviceFileTransfer();
+  }
+  serviceTimeouts();
 
   const uint32_t now = millis();
   if (static_cast<int32_t>(now - nextTelemetryMs) >= 0) {
@@ -373,7 +597,6 @@ void service() {
     publishActivity();
     publishSummary();
   }
-
   if (static_cast<int32_t>(now - nextBatteryMs) >= 0) {
     nextBatteryMs = now + app_config::kBleBatteryIntervalMs;
     publishBattery();
@@ -385,83 +608,118 @@ bool isConnected() {
 }
 
 bool takeCommand(char* output, size_t outputSize) {
-  if (!output || outputSize == 0 || !commandPending || pendingControlLength != 0) {
+  if (!output || outputSize == 0 || !Bluefruit.connected() || pendingControlLength != 0) {
     return false;
   }
-
-  strncpy(output, receivedCommand, outputSize - 1);
-  output[outputSize - 1] = '\0';
-  receivedCommand[0] = '\0';
-  commandPending = false;
-  return true;
+  return takeAssembledCommand(output, outputSize);
 }
 
 bool sendControlResponse(const char* response) {
   return queueControlResponse(response);
 }
 
+bool hasPendingControlResponse() {
+  return pendingControlLength != 0;
+}
+
 void requestTelemetry() {
   telemetryRequested = true;
 }
 
-bool startLogList() {
-  if (fileOperation != FileOperation::Idle || pendingControlLength != 0 || !data_logger::beginLogList()) {
+bool startLogList(uint32_t requestId) {
+  clearTransportError();
+  if (!Bluefruit.connected() || !controlResponseCharacteristic.indicateEnabled()) {
+    setTransportError("control_indications_required");
     return false;
   }
+  if (fileOperationMachine.active() || pendingControlLength != 0) {
+    setTransportError("file_operation_busy");
+    return false;
+  }
+  if (!data_logger::beginLogList()) {
+    return false;
+  }
+  if (!fileOperationMachine.begin(activity_state::FileOperation::Listing)) {
+    data_logger::endLogList();
+    setTransportError("file_operation_busy");
+    return false;
+  }
+  fileOperationRequestId = requestId;
   listedFileCount = 0;
-  fileOperation = FileOperation::Listing;
+  fileOperationLastProgressMs = millis();
   return true;
 }
 
-bool startFileTransfer(const char* name, uint32_t offset) {
-  if (fileOperation != FileOperation::Idle || pendingControlLength != 0) {
+bool startFileTransfer(uint32_t requestId, const char* name, uint32_t offset) {
+  clearTransportError();
+  if (!Bluefruit.connected() || !controlResponseCharacteristic.indicateEnabled()) {
+    setTransportError("control_indications_required");
+    return false;
+  }
+  if (!fileDataCharacteristic.notifyEnabled()) {
+    setTransportError("file_notifications_required");
+    return false;
+  }
+  if (fileOperationMachine.active() || pendingControlLength != 0) {
+    setTransportError("file_operation_busy");
     return false;
   }
 
-  uint32_t sizeBytes = 0;
-  if (!data_logger::beginFileRead(name, offset, sizeBytes)) {
+  data_logger::LogFileInfo info = {};
+  if (!data_logger::beginFileRead(name, offset, info)) {
+    return false;
+  }
+  if (!fileOperationMachine.begin(activity_state::FileOperation::WaitingDownloadBegin)) {
+    data_logger::endFileRead();
+    setTransportError("file_operation_busy");
     return false;
   }
 
-  strncpy(transferFileName, name, sizeof(transferFileName) - 1);
+  fileOperationRequestId = requestId;
+  strncpy(transferFileName, info.name, sizeof(transferFileName) - 1);
   transferFileName[sizeof(transferFileName) - 1] = '\0';
-  transferFileSize = sizeBytes;
+  transferFileSize = info.sizeBytes;
+  transferFileCrc = info.crc32;
   transferOffset = offset;
   fileFrameLength = 0;
   fileFrameDataLength = 0;
-  fileOperation = FileOperation::WaitingDownloadBegin;
+  fileOperationLastProgressMs = millis();
 
+  char crcText[9] = {0};
+  crc32::format(transferFileCrc, crcText);
   char response[app_config::kBleControlResponseBufferSize] = {0};
   snprintf(
       response,
       sizeof(response),
-      "download_begin,%s,%lu,%lu",
+      "download_begin,%lu,%s,%lu,%lu,%s",
+      static_cast<unsigned long>(requestId),
       transferFileName,
       static_cast<unsigned long>(transferFileSize),
-      static_cast<unsigned long>(transferOffset));
+      static_cast<unsigned long>(transferOffset),
+      crcText);
   if (!queueControlResponse(response, ControlAction::BeginTransfer)) {
-    cancelFileOperation();
+    resetFileOperationState();
     return false;
   }
   return true;
 }
 
 void cancelFileOperation() {
-  pendingControlLength = 0;
-  pendingControlResponse[0] = '\0';
-  pendingControlAction = ControlAction::None;
-  data_logger::endFileRead();
-  data_logger::endLogList();
-  fileOperation = FileOperation::Idle;
-  listedFileCount = 0;
-  transferFileName[0] = '\0';
-  transferFileSize = 0;
-  transferOffset = 0;
-  fileFrameLength = 0;
-  fileFrameDataLength = 0;
+  if (fileOperationMachine.active()) {
+    clearControlResponse();
+    resetFileOperationState();
+  }
 }
 
 bool isFileOperationActive() {
-  return fileOperation != FileOperation::Idle;
+  return fileOperationMachine.active();
+}
+
+activity_state::FileOperation fileOperation() {
+  return fileOperationMachine.state();
+}
+
+const char* lastError() {
+  return transportError[0] ? transportError : data_logger::lastError();
 }
 }
