@@ -1,6 +1,6 @@
-# Testing BLE v4 without the physical prototype
+# Testing BLE v5 without the physical prototype
 
-This guide defines the software-only verification path for Activity Tracker BLE dataset protocol v4. It covers host-testable firmware logic, Android JVM tests, APK assembly, an Android emulator smoke test, and the in-app segmented-recording simulator.
+This guide defines the software-only verification path for Activity Tracker BLE dataset protocol v5. It covers host-testable firmware logic, Android JVM tests, APK assembly, an Android emulator smoke test, and the in-app segmented-recording simulator.
 
 Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, battery circuit, power-loss behavior, or real BLE throughput. Those remain hardware acceptance tests.
 
@@ -10,13 +10,13 @@ Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, ba
 | --- | --- | --- |
 | Main firmware cross-build | `pio run -e seeed_xiao_nrf52840_sense` | No |
 | Formatter cross-build | `pio run -e seeed_xiao_nrf52840_sense_formatter` | No |
-| Pure v4 firmware modules | `pio test -e native_protocol_tests` | No |
+| Pure v5 firmware modules | `pio test -e native_protocol_tests` | No |
 | Android JVM tests and APK | `.\gradlew.bat testDebugUnitTest assembleDebug` | No |
 | Android instrumentation smoke | `.\gradlew.bat connectedDebugAndroidTest` on `ActivityTracker_API_35` | No |
-| Android v4 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
+| Android v5 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
 | BLE/QSPI/power acceptance | physical test matrix | Yes |
 
-`native_protocol_tests` and at least one instrumentation smoke test are required v4 integration gates. If the PlatformIO environment or `androidTest` source set is absent, that is missing test coverage, not a passing result. Do not report a command as passed until it exists and exits successfully.
+`native_protocol_tests` and at least one instrumentation smoke test are required v5 integration gates. If the PlatformIO environment or `androidTest` source set is absent, that is missing test coverage, not a passing result. Do not report a command as passed until it exists and exits successfully.
 
 ## 1. PowerShell and MSYS2 setup
 
@@ -70,7 +70,7 @@ pio test -e native_protocol_tests
 The native suite should exercise code that has no Arduino/BLE/flash dependency, including:
 
 - IEEE CRC-32, including the standard `123456789 -> CBF43926` vector and incremental updates;
-- v4 command parsing, exact request-ID propagation, label/name/range validation, segmentation boundary, and fragmented newline-delimited control input;
+- v5 command parsing, exact request-ID propagation, label/name/range validation, segmentation boundary, pause/resume transitions, and fragmented newline-delimited control input;
 - the recording state machine: idle/start, idempotent same-label start, conflicting start, stop replay, and recording preserved across disconnect;
 - contiguous file-frame decisions for accept, full duplicate, gap, overlap, and overflow;
 - guarded delete metadata checks.
@@ -89,7 +89,7 @@ Pop-Location
 
 The JVM suite should cover at least:
 
-- fragmented v4 control records and request-ID correlation;
+- fragmented v5 control records and request-ID correlation;
 - command timeout and reconciliation behavior;
 - file-frame duplicate/gap/overlap/overflow handling;
 - resume metadata compatibility;
@@ -139,7 +139,7 @@ Before running the gate, verify that instrumentation tests exist; Gradle must no
 ```powershell
 Push-Location android
 if (-not (Test-Path '.\app\src\androidTest')) {
-    throw 'Missing androidTest smoke coverage for BLE v4'
+    throw 'Missing androidTest smoke coverage for BLE v5'
 }
 .\gradlew.bat connectedDebugAndroidTest --console=plain
 Pop-Location
@@ -147,7 +147,7 @@ Pop-Location
 
 At minimum, the smoke test should launch `MainActivity`, navigate with the mock source enabled, and prove that the `Data` workflow can reach its recording and completed-download states without crashing.
 
-## 6. Manual v4 simulator scenario
+## 6. Manual v5 simulator scenario
 
 Install and launch the debug app on the running AVD:
 

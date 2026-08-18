@@ -142,6 +142,15 @@ object BleDatasetProtocol {
                     freeBytes = parseUInt32(parts[7]) ?: return null,
                 )
             }
+            "paused" -> {
+                if (parts.size != 9) return null
+                DeviceStatus.PausedForOffload(
+                    label = parseActivity(parts[3]) ?: return null,
+                    file = parseFileIdentity(parts[4], parts[5], parts[6]) ?: return null,
+                    elapsedMillis = parseUInt32(parts[7]) ?: return null,
+                    freeBytes = parseUInt32(parts[8]) ?: return null,
+                )
+            }
             "fault" -> {
                 if (parts.size != 6 || parts[3].isBlank()) return null
                 val active = parts[4].takeUnless { it == "none" }

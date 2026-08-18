@@ -39,7 +39,7 @@ class MockDeviceDataSource(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val connectDelayMillis: Long = 100L,
     private val frameDelayMillis: Long = 2L,
-    private val segmentMaxSamples: Long = 4_500L,
+    private val segmentMaxSamples: Long = 27_000L,
 ) : DeviceDataSource {
     private val simulatorLock = Any()
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -69,6 +69,7 @@ class MockDeviceDataSource(
     private var recordingBuffer: StringBuilder? = null
     private var recordedSamples = 0L
     private var segmentSamples = 0L
+    private var pausedIdentity: RemoteFileIdentity? = null
     private var lastFile: RemoteFileIdentity? = null
     private var sessionIndex = 1
     private var steps = 0
@@ -186,6 +187,7 @@ class MockDeviceDataSource(
                 recordingBuffer = StringBuilder(CSV_HEADER)
                 recordedSamples = 0L
                 segmentSamples = 0L
+                pausedIdentity = null
                 startSamples = true
                 DeviceControlResponse.RecordingStarted(command.requestId, command.activity, name, false)
             }
@@ -199,6 +201,16 @@ class MockDeviceDataSource(
             val name = recordingName
             if (name == null) {
                 DeviceControlResponse.RecordingStopped(requestId, lastFile, true)
+            } else if (pausedIdentity != null) {
+                val identity = requireNotNull(pausedIdentity)
+                recordingJob?.cancel()
+                recordingJob = null
+                recordingLabel = null
+                recordingName = null
+                recordingBuffer = null
+                pausedIdentity = null
+                segmentSamples = 0L
+                DeviceControlResponse.RecordingStopped(requestId, identity, false)
             } else {
                 recordingJob?.cancel()
                 recordingJob = null
@@ -210,6 +222,7 @@ class MockDeviceDataSource(
                 recordingName = null
                 recordingBuffer = null
                 segmentSamples = 0L
+                pausedIdentity = null
                 DeviceControlResponse.RecordingStopped(requestId, identity, false)
             }
         }
@@ -229,7 +242,7 @@ class MockDeviceDataSource(
                     )
                     recordedSamples += 1L
                     segmentSamples += 1L
-                    if (segmentSamples >= segmentMaxSamples) rotateSegmentLocked(label, buffer)
+                    if (segmentSamples >= segmentMaxSamples) rotateSegmentLocked(buffer)
                     true
                 }
                 if (!appended) break
@@ -243,8 +256,9 @@ class MockDeviceDataSource(
 
     private suspend fun listLogs(requestId: Long) {
         val snapshot = synchronized(simulatorLock) {
-            logs.mapValues { (_, bytes) -> bytes.copyOf() }
+            if (recordingBuffer != null) null else logs.mapValues { (_, bytes) -> bytes.copyOf() }
         }
+        if (snapshot == null) return emitControl(DeviceControlResponse.Error(requestId, "busy_recording"))
         snapshot.forEach { (name, bytes) ->
             emitControl(
                 DeviceControlResponse.FileEntry(
@@ -258,7 +272,10 @@ class MockDeviceDataSource(
 
     private suspend fun startDownload(command: DeviceCommand.Download) {
         val bytes = synchronized(simulatorLock) {
-            logs[command.fileName]?.copyOf()
+            if (recordingBuffer != null) null else logs[command.fileName]?.copyOf()
+        }
+        if (synchronized(simulatorLock) { recordingBuffer != null }) {
+            return emitControl(DeviceControlResponse.Error(command.requestId, "busy_recording"))
         }
         bytes
             ?: return emitControl(DeviceControlResponse.Error(command.requestId, "file_not_found"))
@@ -299,7 +316,10 @@ class MockDeviceDataSource(
 
     private suspend fun deleteLog(command: DeviceCommand.Delete) {
         val bytes = synchronized(simulatorLock) {
-            logs[command.file.name]?.copyOf()
+            if (recordingBuffer != null) null else logs[command.file.name]?.copyOf()
+        }
+        if (synchronized(simulatorLock) { recordingBuffer != null }) {
+            return emitControl(DeviceControlResponse.Error(command.requestId, "busy_recording"))
         }
         if (bytes == null) {
             emitControl(DeviceControlResponse.Deleted(command.requestId, command.file.name, true))
@@ -310,30 +330,47 @@ class MockDeviceDataSource(
             emitControl(DeviceControlResponse.Error(command.requestId, "file_identity_mismatch"))
             return
         }
+        var resumeSamples = false
         synchronized(simulatorLock) {
             logs.remove(command.file.name)
             if (lastFile == command.file) lastFile = null
+            if (pausedIdentity == command.file && recordingLabel != null) {
+                val nextName = "${recordingLabel!!.wireName}_${sessionIndex.toString().padStart(4, '0')}.csv"
+                sessionIndex += 1
+                recordingName = nextName
+                recordingBuffer = StringBuilder(CSV_HEADER)
+                pausedIdentity = null
+                segmentSamples = 0L
+                resumeSamples = true
+            }
         }
+        if (resumeSamples) startRecordingSamples()
         emitControl(DeviceControlResponse.Deleted(command.requestId, command.file.name, false))
     }
 
-    private fun rotateSegmentLocked(label: ActivityType, completedBuffer: StringBuilder) {
+    private fun rotateSegmentLocked(completedBuffer: StringBuilder) {
         val completedName = recordingName ?: return
         val bytes = completedBuffer.toString().toByteArray(Charsets.UTF_8)
         logs[completedName] = bytes
-        lastFile = RemoteFileIdentity(completedName, bytes.size.toLong(), crc32(bytes))
-
-        val nextName = "${label.wireName}_${sessionIndex.toString().padStart(4, '0')}.csv"
-        sessionIndex += 1
-        recordingName = nextName
-        recordingBuffer = StringBuilder(CSV_HEADER)
+        val identity = RemoteFileIdentity(completedName, bytes.size.toLong(), crc32(bytes))
+        lastFile = identity
+        pausedIdentity = identity
+        recordingBuffer = null
         segmentSamples = 0L
     }
 
     private fun currentStatus(): DeviceStatus = synchronized(simulatorLock) {
         val label = recordingLabel
         val name = recordingName
-        if (label != null && name != null) {
+        val paused = pausedIdentity
+        if (label != null && paused != null) {
+            DeviceStatus.PausedForOffload(
+                label,
+                paused,
+                recordedSamples * RECORDING_SAMPLE_INTERVAL_MS,
+                MOCK_FREE_BYTES,
+            )
+        } else if (label != null && name != null) {
             DeviceStatus.Recording(
                 label,
                 name,

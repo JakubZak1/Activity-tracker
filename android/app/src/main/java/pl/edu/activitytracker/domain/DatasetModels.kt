@@ -1,6 +1,6 @@
 package pl.edu.activitytracker.domain
 
-const val DATASET_PROTOCOL_VERSION = 4
+const val DATASET_PROTOCOL_VERSION = 5
 const val MAX_REQUEST_ID = 0xFFFF_FFFFL
 
 val REQUIRED_DATASET_CAPABILITIES = setOf(
@@ -11,6 +11,7 @@ val REQUIRED_DATASET_CAPABILITIES = setOf(
     "crc32",
     "segmentation",
     "auto_offload",
+    "pause_offload",
 )
 
 data class RemoteFileIdentity(
@@ -45,6 +46,13 @@ sealed interface DeviceStatus {
         override val freeBytes: Long,
     ) : DeviceStatus
 
+    data class PausedForOffload(
+        val label: ActivityType,
+        val file: RemoteFileIdentity,
+        val elapsedMillis: Long,
+        override val freeBytes: Long,
+    ) : DeviceStatus
+
     data class Fault(
         val code: String,
         val activeFileName: String?,
@@ -76,6 +84,12 @@ sealed interface CollectionState {
         val elapsedMillis: Long = 0L,
         val bytesWritten: Long = 0L,
         val freeBytes: Long? = null,
+    ) : CollectionState
+    data class PausedForOffload(
+        val label: ActivityType,
+        val file: RemoteFileIdentity,
+        val elapsedMillis: Long,
+        val freeBytes: Long,
     ) : CollectionState
     data class Stopping(val fileName: String?) : CollectionState
     data class Fault(val code: String, val activeFileName: String?, val freeBytes: Long?) : CollectionState

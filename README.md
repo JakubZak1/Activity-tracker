@@ -2,14 +2,14 @@
 
 Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. The current milestone is a reliable BLE-controlled workflow for recording labeled IMU sessions, storing them in QSPI flash, and downloading verified CSV files to an Android phone.
 
-The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v4 is the current source-compatible pair: the firmware and Android app must be upgraded together.
+The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v5 is the current source-compatible pair: the firmware and Android app must be upgraded together.
 
 Current project status:
 
-- BLE v4 continuous segmented recording, resumable offload, CRC32 verification, and guarded automatic deletion are implemented in source.
+- BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
 - The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
-- A v4 mock device simulates segmentation and the dataset workflow when the board is unavailable.
-- Earlier v3 recording and transfer paths were exercised on the physical prototype; v4 locked-screen segmentation and automatic deletion still require the physical acceptance run.
+- A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
+- A nearly 20-minute locked-screen v4 hardware run proved foreground BLE offload and guarded deletion, but exposed bursty sampling while QSPI was read concurrently. v5 removes that concurrency and still requires its final physical timing run.
 - There is currently no research dataset. Existing CSV files, if present locally, are smoke-test recordings only.
 - There is no trained ML model, no activity-classification inference on the device, and no real step-counting algorithm. Live activity and summary telemetry remain placeholders.
 
@@ -32,8 +32,8 @@ Normal firmware environment:
 - records one of five labels: `walking`, `running`, `cycling`, `sitting`, or `lying`
 - writes an active session to a temporary file and exposes only finalized CSV files as complete logs
 - keeps recording if the BLE connection is lost; reconnecting clients reconcile state with `status`
-- provides BLE v4 status, recording, catalog, resumable download, cancel, and guarded delete operations
-- closes the active CSV at 256 KiB and immediately continues in a new segment with the same label
+- provides BLE v5 status, recording, paused-offload, catalog, resumable download, cancel, and guarded delete operations
+- closes the active CSV at 1536 KiB (or before the reserve is exhausted), pauses for verified offload, and resumes the same label only after guarded deletion
 - calculates IEEE CRC-32 for finalized CSV bytes
 - reports approximate LiPo battery voltage and percentage
 - publishes placeholder activity/summary telemetry until ML inference and step counting exist
@@ -63,9 +63,9 @@ Key source modules:
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
 
-## BLE Dataset Protocol v4
+## BLE Dataset Protocol v5
 
-The authoritative wire contract is [docs/ble_protocol_v4.md](docs/ble_protocol_v4.md). Protocol v4 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
+The authoritative wire contract is [docs/ble_protocol_v5.md](docs/ble_protocol_v5.md). Protocol v5 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
 
 The board advertises as:
 
@@ -95,12 +95,12 @@ Every command and response carries a request ID. Text control records end with `
 ### Phone-controlled recording workflow
 
 1. In Android, open `Data` and choose a destination folder using the system folder picker.
-2. Connect to the board and wait for the v4 `hello` capability check and `status` reconciliation.
+2. Connect to the board and wait for the v5 `hello` capability check and `status` reconciliation.
 3. Select exactly one activity label and tap `Start`. Android sends one atomic `record_start` command containing the label.
 4. Record the activity. Losing the BLE connection does not stop the board; after reconnect, Android requests `status` and restores the visible recording state.
-5. At 256 KiB, firmware finalizes a segment and immediately continues in a new file with the same label.
-6. A foreground Android service automatically downloads or resumes each closed segment, including while the screen is locked.
-7. Only after durable local save and a second size/CRC32 verification does Android automatically request guarded deletion of the board copy.
+5. At 1536 KiB, or earlier to protect the storage reserve, firmware finalizes the segment and pauses sampling.
+6. A foreground Android service automatically downloads or resumes the closed segment, including while the screen is locked.
+7. Only after durable local save and a second size/CRC32 verification does Android request guarded deletion; successful deletion makes firmware resume the same label.
 8. Tap `Stop` to finalize, offload, and safely delete the last segment.
 
 Incomplete files caused by power loss or write/finalization failure are listed as incomplete and are not auto-downloaded or deletable through the normal verified-file flow.
@@ -109,7 +109,7 @@ Incomplete files caused by power loss or write/finalization failure are listed a
 
 BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-The v4 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Physical locked-screen offload, QSPI pressure, and segment-boundary timing remain pending hardware tests.
+The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Its physical segment-boundary timing and pause/offload/resume cycle remain pending hardware tests.
 
 ## Android MVP App
 
@@ -117,12 +117,12 @@ The Android app is a local, Android-only MVP. It does not use accounts, cloud st
 
 Current app features:
 
-- BLE scan/connect, v4 handshake, status reconciliation, indications, notifications, and queued command writes
+- BLE scan/connect, v5 handshake, status reconciliation, indications, notifications, and queued command writes
 - a `Data` screen for selecting the recorded activity, start/stop, storage status, log catalog, and verified automatic offload
 - continuous segmented CSV offload to a user-selected Storage Access Framework folder
 - a foreground connected-device service and partial wake lock for locked-screen transfer
 - byte-count and CRC32 verification before `.part` is finalized
-- a full v4 mock device for segmentation/recording/catalog/download/delete development without the board
+- a full v5 mock device for pause/offload/resume development without the board
 - live activity, confidence, battery, session duration, steps, and calories UI
 - MET-based calorie estimate using user weight
 - phone GPS preview on the map
@@ -134,7 +134,7 @@ Current app features:
 
 Current limitations:
 
-- v4 continuous locked-screen offload has not yet passed the physical acceptance run
+- v5 pause/offload/resume and corrected 50 Hz timing have not yet passed the physical acceptance run
 - BLE has no pairing, authentication, application-layer encryption, or authorization
 - firmware publishes placeholder activity, confidence, steps, and summary values
 - there is no ML model or on-device inference
@@ -165,7 +165,7 @@ directory instead.
 
 See [android/README.md](android/README.md) for the app architecture and [docs/testing_without_hardware.md](docs/testing_without_hardware.md) for the host and emulator checks.
 
-### v4 simulator without the board
+### v5 simulator without the board
 
 1. Open `Settings`, enable `Mock data source`, and return to `Home`.
 2. Tap `Connect mock`.
@@ -194,14 +194,14 @@ Formatter firmware:
 pio run -e seeed_xiao_nrf52840_sense_formatter
 ```
 
-The v4 integration also requires a host-native protocol test environment:
+The v5 integration also requires a host-native protocol test environment:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 pio test -e native_protocol_tests
 ```
 
-`native_protocol_tests` and at least one Android emulator smoke test are required integration gates for v4. They must not be reported as passed until their environments/tests are present and the commands complete successfully. Setup, expected coverage, and the `ActivityTracker_API_35` AVD flow are documented in [docs/testing_without_hardware.md](docs/testing_without_hardware.md).
+`native_protocol_tests` and at least one Android emulator smoke test are required integration gates for v5. They must not be reported as passed until their environments/tests are present and the commands complete successfully. Setup, expected coverage, and the `ActivityTracker_API_35` AVD flow are documented in [docs/testing_without_hardware.md](docs/testing_without_hardware.md).
 
 ## Upload
 
@@ -250,7 +250,7 @@ After that, flash the normal logger firmware again.
 
 ## Serial Commands
 
-The normal firmware accepts the same newline-delimited v4 control records over
+The normal firmware accepts the same newline-delimited v5 control records over
 USB serial as it does over BLE. Choose an unsigned 32-bit request ID for each
 command:
 
@@ -269,7 +269,7 @@ File download remains BLE-only because its data is carried by the binary
 `file_data` characteristic. The console deliberately has no unguarded `erase`
 command and no separate persisted `label` command.
 
-BLE v4 dataset labels are limited to:
+BLE v5 dataset labels are limited to:
 
 - `walking`
 - `running`
@@ -311,7 +311,7 @@ Derived values such as roll, pitch, temperature, and IMU address are not stored 
 
 Battery percentage is estimated from LiPo voltage, so treat it as approximate. The value depends on load, charging state, and battery condition.
 
-No research dataset has been collected yet. Before recording data intended for ML, first complete the physical v4 validation, choose a stable mount and orientation, and define the measurement protocol. Future recordings should use:
+No research dataset has been collected yet. Before recording data intended for ML, first complete the physical v5 validation, choose a stable mount and orientation, and define the measurement protocol. Future recordings should use:
 
 - same wrist
 - same board orientation
@@ -361,9 +361,9 @@ writes `.part` files, supports resume, and exposes the final CSV only after the
 device size and CRC32 both match.
 
 `tools/download_log.py` targets the legacy pre-v3 USB `read` protocol and is not
-compatible with the current firmware. BLE v4 intentionally carries file bytes
+compatible with the current firmware. BLE v5 intentionally carries file bytes
 only through the binary `file_data` characteristic; do not use the legacy tool
-for new recordings or as evidence that a v4 transfer was verified.
+for new recordings or as evidence that a v5 transfer was verified.
 
 Load all local raw logs and print a quick summary:
 
@@ -420,8 +420,8 @@ The formatter keeps local FATFS sources in `src/fatfs/` because the one-time for
 
 Next project stages:
 
-1. complete native/JVM/emulator verification of protocol v4
-2. validate BLE v4 and QSPI behavior on the repaired physical prototype, including locked-screen segmentation, reconnect, power loss, resume, CRC mismatch, and guarded automatic deletion
+1. complete native/JVM/emulator verification of protocol v5
+2. validate BLE v5 and QSPI behavior on the repaired physical prototype, including locked-screen pause/offload/resume, corrected sample timing, reconnect, power loss, CRC mismatch, and guarded automatic deletion
 3. define one stable wrist mount, orientation, and measurement protocol
 4. collect and validate the first real five-class dataset
 5. build an offline training/evaluation pipeline with session-level splits

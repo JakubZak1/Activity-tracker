@@ -167,6 +167,23 @@ void testStateMachinesAndReplayPolicy() {
   expect(recording.state() == activity_state::RecordingState::Recording, "start replay keeps one session");
   expect(recording.state() == activity_state::RecordingState::Recording, "disconnect preserves recording");
 
+  TEST_ASSERT_TRUE(recording.pauseForOffload());
+  TEST_ASSERT_FALSE(recording.pauseForOffload());
+  expect(
+      recording.state() == activity_state::RecordingState::PausedForOffload,
+      "a finalized segment pauses sampling for verified offload");
+  expect(
+      activity_state::decideRecordStart(recording.state(), "walking", "walking") ==
+          activity_state::RecordStartDecision::Replay,
+      "same-label start remains idempotent while paused");
+  expect(
+      activity_state::decideRecordStart(recording.state(), "walking", "running") ==
+          activity_state::RecordStartDecision::Conflict,
+      "different-label start conflicts while paused");
+  TEST_ASSERT_TRUE(recording.resumeAfterOffload());
+  TEST_ASSERT_FALSE(recording.resumeAfterOffload());
+  expect(recording.state() == activity_state::RecordingState::Recording, "verified delete resumes sampling");
+
   TEST_ASSERT_TRUE(recording.complete());
   TEST_ASSERT_FALSE(recording.complete());
   expect(recording.state() == activity_state::RecordingState::Idle, "stop returns idle");
@@ -187,10 +204,11 @@ void testStateMachinesAndReplayPolicy() {
 }
 
 void testSegmentRotationBoundary() {
-  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(0, 256 * 1024UL));
-  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(256 * 1024UL - 1, 256 * 1024UL));
-  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(256 * 1024UL, 256 * 1024UL));
-  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(256 * 1024UL + 1, 256 * 1024UL));
+  constexpr uint32_t limit = 1536UL * 1024UL;
+  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(0, limit));
+  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(limit - 1, limit));
+  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(limit, limit));
+  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(limit + 1, limit));
   TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(UINT32_MAX, 0));
 }
 }

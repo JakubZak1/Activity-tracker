@@ -30,6 +30,11 @@ bool serialFaultReported = false;
 bool bleFaultReported = false;
 bool faultBleWasConnected = false;
 char recordingFault[64] = {0};
+data_logger::LogFileInfo pendingOffload = {};
+bool hasPendingOffload = false;
+char pendingOffloadLabel[app_config::kActivityLabelBufferSize] = {0};
+uint32_t cachedFreeBytes = 0;
+uint32_t recordingFreeBytesAtStart = 0;
 
 void setLed(bool on) {
   digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
@@ -110,22 +115,28 @@ bool getFreeBytes(uint32_t& freeBytes) {
   return data_logger::getStorageStats(totalBytes, usedBytes, freeBytes);
 }
 
+bool refreshCachedFreeBytes() {
+  return getFreeBytes(cachedFreeBytes);
+}
+
 void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) {
   char response[128] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,%lu,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload",
+      "ok,%lu,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload",
       static_cast<unsigned long>(requestId));
   sendResponse(transport, serial, response);
 }
 
 void sendStatus(ResponseTransport transport, Stream* serial, uint32_t requestId) {
-  uint32_t freeBytes = 0;
-  if (!getFreeBytes(freeBytes)) {
+  uint32_t freeBytes = cachedFreeBytes;
+  if (recordingMachine.state() != activity_state::RecordingState::Recording &&
+      !refreshCachedFreeBytes()) {
     sendError(transport, serial, requestId, data_logger::lastError());
     return;
   }
+  freeBytes = cachedFreeBytes;
 
   char response[app_config::kBleControlResponseBufferSize] = {0};
   switch (recordingMachine.state()) {
@@ -154,6 +165,9 @@ void sendStatus(ResponseTransport transport, Stream* serial, uint32_t requestId)
       break;
     }
     case activity_state::RecordingState::Recording:
+      freeBytes = data_logger::currentBytesWritten() < recordingFreeBytesAtStart
+                      ? recordingFreeBytesAtStart - data_logger::currentBytesWritten()
+                      : 0;
       snprintf(
           response,
           sizeof(response),
@@ -165,6 +179,26 @@ void sendStatus(ResponseTransport transport, Stream* serial, uint32_t requestId)
           static_cast<unsigned long>(data_logger::currentBytesWritten()),
           static_cast<unsigned long>(freeBytes));
       break;
+    case activity_state::RecordingState::PausedForOffload: {
+      if (!hasPendingOffload) {
+        sendError(transport, serial, requestId, "paused_file_missing");
+        return;
+      }
+      char crcText[9] = {0};
+      crc32::format(pendingOffload.crc32, crcText);
+      snprintf(
+          response,
+          sizeof(response),
+          "status,%lu,paused,%s,%s,%lu,%s,%lu,%lu",
+          static_cast<unsigned long>(requestId),
+          data_logger::currentLabel(),
+          pendingOffload.name,
+          static_cast<unsigned long>(pendingOffload.sizeBytes),
+          crcText,
+          static_cast<unsigned long>(millis() - recordingStartedAtMs),
+          static_cast<unsigned long>(freeBytes));
+      break;
+    }
     case activity_state::RecordingState::Fault:
       snprintf(
           response,
@@ -212,6 +246,14 @@ void handleRecordStart(
     sendError(transport, serial, command.requestId, "file_operation_busy");
     return;
   }
+  if (!refreshCachedFreeBytes()) {
+    sendError(transport, serial, command.requestId, data_logger::lastError());
+    return;
+  }
+  if (cachedFreeBytes <= app_config::kCriticalFreeBytes) {
+    sendError(transport, serial, command.requestId, "storage_critical");
+    return;
+  }
   if (!data_logger::startSession(command.label)) {
     copyFault(data_logger::lastError());
     sendError(transport, serial, command.requestId, recordingFault);
@@ -222,6 +264,7 @@ void handleRecordStart(
     sendError(transport, serial, command.requestId, recordingFault);
     return;
   }
+  recordingFreeBytesAtStart = cachedFreeBytes;
   resetSamplingRuntime();
   char response[128] = {0};
   snprintf(
@@ -267,6 +310,32 @@ void handleRecordStop(
           "ok,%lu,already_stopped,none,0,none",
           static_cast<unsigned long>(command.requestId));
     }
+    sendResponse(transport, serial, response);
+    return;
+  }
+
+  if (recordingMachine.state() == activity_state::RecordingState::PausedForOffload) {
+    if (!hasPendingOffload || !recordingMachine.complete()) {
+      copyFault("paused_state_error");
+      sendError(transport, serial, command.requestId, recordingFault);
+      return;
+    }
+    const data_logger::LogFileInfo info = pendingOffload;
+    hasPendingOffload = false;
+    memset(&pendingOffload, 0, sizeof(pendingOffload));
+    pendingOffloadLabel[0] = '\0';
+    setLed(false);
+    char crcText[9] = {0};
+    crc32::format(info.crc32, crcText);
+    char response[160] = {0};
+    snprintf(
+        response,
+        sizeof(response),
+        "ok,%lu,recording_stopped,%s,%lu,%s",
+        static_cast<unsigned long>(command.requestId),
+        info.name,
+        static_cast<unsigned long>(info.sizeBytes),
+        crcText);
     sendResponse(transport, serial, response);
     return;
   }
@@ -377,11 +446,38 @@ void handleDelete(
     sendError(transport, serial, command.requestId, "file_operation_busy");
     return;
   }
+  const bool resumesPausedRecording =
+      recordingMachine.state() == activity_state::RecordingState::PausedForOffload &&
+      hasPendingOffload && strcmp(pendingOffload.name, command.name) == 0 &&
+      pendingOffload.sizeBytes == command.sizeBytes && pendingOffload.crc32 == command.crc32;
   const data_logger::DeleteResult result =
       data_logger::deleteLogFile(command.name, command.sizeBytes, command.crc32);
   if (result == data_logger::DeleteResult::Error) {
     sendError(transport, serial, command.requestId, data_logger::lastError());
     return;
+  }
+  if (resumesPausedRecording) {
+    const char* resumeError = nullptr;
+    if (!refreshCachedFreeBytes()) {
+      resumeError = data_logger::lastError();
+    } else if (cachedFreeBytes <= app_config::kCriticalFreeBytes) {
+      resumeError = "storage_critical";
+    } else if (!data_logger::startSession(pendingOffloadLabel)) {
+      resumeError = data_logger::lastError();
+    } else if (!recordingMachine.resumeAfterOffload()) {
+      resumeError = "recording_resume_failed";
+    } else {
+      recordingFreeBytesAtStart = cachedFreeBytes;
+    }
+    if (resumeError != nullptr) {
+      copyFault(resumeError);
+      sendError(transport, serial, command.requestId, recordingFault);
+      return;
+    }
+    hasPendingOffload = false;
+    memset(&pendingOffload, 0, sizeof(pendingOffload));
+    pendingOffloadLabel[0] = '\0';
+    nextSampleMs = millis();
   }
   char response[128] = {0};
   snprintf(
@@ -398,6 +494,14 @@ void dispatchCommand(
     ResponseTransport transport,
     Stream* serial,
     const protocol_v3::Command& command) {
+  if (recordingMachine.state() == activity_state::RecordingState::Recording &&
+      command.type != protocol_v3::CommandType::Hello &&
+      command.type != protocol_v3::CommandType::Status &&
+      command.type != protocol_v3::CommandType::RecordStart &&
+      command.type != protocol_v3::CommandType::RecordStop) {
+    sendError(transport, serial, command.requestId, "busy_recording");
+    return;
+  }
   if (recordingMachine.state() == activity_state::RecordingState::Fault &&
       command.type != protocol_v3::CommandType::Hello &&
       command.type != protocol_v3::CommandType::Status &&
@@ -542,6 +646,7 @@ void setup() {
 
   const bool bleReady = ble_service::begin();
   resetSamplingRuntime();
+  refreshCachedFreeBytes();
   if (Serial) {
     if (bleReady) {
       Serial.print("info,ble_advertising,");
@@ -571,7 +676,7 @@ void loop() {
   if (static_cast<int32_t>(now - nextSampleMs) < 0) {
     return;
   }
-  nextSampleMs += app_config::kSampleIntervalMs;
+  nextSampleMs = now + app_config::kSampleIntervalMs;
   const IMUSample sample = imu_reader::readSample(sampleId++, now);
   if (!data_logger::writeSample(sample, data_logger::currentLabel(), serialStreaming, Serial)) {
     copyFault(data_logger::lastError());
@@ -589,10 +694,18 @@ void loop() {
     return;
   }
 
-  if (activity_state::shouldRotateSegment(
-          data_logger::currentBytesWritten(), app_config::kSegmentMaxBytes)) {
-    char label[app_config::kActivityLabelBufferSize] = {0};
-    strncpy(label, data_logger::currentLabel(), sizeof(label) - 1);
+  const uint32_t currentBytes = data_logger::currentBytesWritten();
+  const uint32_t safeBytesForSegment =
+      recordingFreeBytesAtStart > app_config::kCriticalFreeBytes
+          ? recordingFreeBytesAtStart - app_config::kCriticalFreeBytes
+          : 0;
+  if (activity_state::shouldRotateSegment(currentBytes, app_config::kSegmentMaxBytes) ||
+      activity_state::shouldRotateSegment(currentBytes, safeBytesForSegment)) {
+    strncpy(
+        pendingOffloadLabel,
+        data_logger::currentLabel(),
+        sizeof(pendingOffloadLabel) - 1);
+    pendingOffloadLabel[sizeof(pendingOffloadLabel) - 1] = '\0';
     data_logger::LogFileInfo completed = {};
     if (!data_logger::stopSession(completed)) {
       copyFault(data_logger::lastError());
@@ -600,21 +713,18 @@ void loop() {
       return;
     }
 
-    uint32_t totalBytes = 0;
-    uint32_t usedBytes = 0;
-    uint32_t freeBytes = 0;
-    if (!data_logger::getStorageStats(totalBytes, usedBytes, freeBytes) ||
-        freeBytes < app_config::kCriticalFreeBytes) {
-      copyFault("storage_critical");
+    if (!recordingMachine.pauseForOffload()) {
+      copyFault("recording_pause_failed");
       reportRecordingFaultIfNeeded();
       return;
     }
-    if (!data_logger::startSession(label)) {
+    pendingOffload = completed;
+    hasPendingOffload = true;
+    if (!refreshCachedFreeBytes()) {
       copyFault(data_logger::lastError());
       reportRecordingFaultIfNeeded();
       return;
     }
-    nextSampleMs = millis() + app_config::kSampleIntervalMs;
     if (Serial) {
       char crcText[9] = {0};
       crc32::format(completed.crc32, crcText);
@@ -624,8 +734,7 @@ void loop() {
       Serial.print(completed.sizeBytes);
       Serial.print(',');
       Serial.print(crcText);
-      Serial.print(",next,");
-      Serial.println(data_logger::currentLogPath());
+      Serial.println(",paused_for_offload");
     }
   }
 }

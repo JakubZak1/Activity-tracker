@@ -199,7 +199,9 @@ class DatasetController(
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
                     val status = reconcileAfterMutationFailure("Start failed: ${error.userMessage()}")
-                    if (status !is DeviceStatus.Recording) continuousSessionActive = false
+                    if (status !is DeviceStatus.Recording && status !is DeviceStatus.PausedForOffload) {
+                        continuousSessionActive = false
+                    }
                 }
             }
         }
@@ -209,9 +211,14 @@ class DatasetController(
         scope.launch {
             runExclusive {
                 if (!isReady()) return@runExclusive
-                val recording = _state.value.collection as? CollectionState.Recording ?: return@runExclusive
+                val active = _state.value.collection
+                val activeFileName = when (active) {
+                    is CollectionState.Recording -> active.fileName
+                    is CollectionState.PausedForOffload -> active.file.name
+                    else -> return@runExclusive
+                }
                 _state.update {
-                    it.copy(collection = CollectionState.Stopping(recording.fileName), operationMessage = "Stopping recording...")
+                    it.copy(collection = CollectionState.Stopping(activeFileName), operationMessage = "Stopping recording...")
                 }
                 var fileToDownload: DeviceLogFile? = null
                 try {
@@ -377,7 +384,7 @@ class DatasetController(
             val hello = awaitSingle(DeviceCommand.Hello(nextRequestId()))
             ensureConnectionSession(expectedGeneration, expectedIdentity)
             if (hello !is DeviceControlResponse.Hello) {
-                throw ProtocolException("Device did not return a v4 hello response")
+                throw ProtocolException("Device did not return a v5 hello response")
             }
             val missing = REQUIRED_DATASET_CAPABILITIES - hello.capabilities
             if (hello.protocolVersion != DATASET_PROTOCOL_VERSION || missing.isNotEmpty()) {
@@ -386,9 +393,9 @@ class DatasetController(
                 _state.update {
                     it.copy(
                         connection = DatasetConnectionState.Incompatible(
-                            "Expected protocol 4 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
+                            "Expected protocol 5 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
                         ),
-                        operationMessage = "Install matching Android and firmware v4 builds.",
+                        operationMessage = "Install matching Android and firmware v5 builds.",
                     )
                 }
                 return
@@ -400,16 +407,18 @@ class DatasetController(
             readyInfo = DatasetConnectionState.Ready(hello.protocolVersion, hello.capabilities, expectedIdentity)
             readyGeneration = expectedGeneration
             _state.update { it.copy(connection = requireNotNull(readyInfo), operationMessage = null) }
-            try {
-                refreshCatalogLocked()
-                ensureConnectionSession(expectedGeneration, expectedIdentity)
-            } catch (error: Exception) {
-                if (error is CancellationException) throw error
-                _state.update {
-                    it.copy(
-                        catalog = CatalogState.Error(error.userMessage(), it.catalog.files),
-                        operationMessage = "Connected, but catalog sync failed: ${error.userMessage()}",
-                    )
+            if (status !is DeviceStatus.Recording) {
+                try {
+                    refreshCatalogLocked()
+                    ensureConnectionSession(expectedGeneration, expectedIdentity)
+                } catch (error: Exception) {
+                    if (error is CancellationException) throw error
+                    _state.update {
+                        it.copy(
+                            catalog = CatalogState.Error(error.userMessage(), it.catalog.files),
+                            operationMessage = "Connected, but catalog sync failed: ${error.userMessage()}",
+                        )
+                    }
                 }
             }
             if (continuousSessionActive || hasRemoteCompletedFiles()) ensureAutoOffloadLoop()
@@ -422,7 +431,7 @@ class DatasetController(
                 it.copy(
                     connection = DatasetConnectionState.Error("Handshake failed: ${error.userMessage()}"),
                     collection = CollectionState.Unknown,
-                    operationMessage = "Reconnect after installing matching v4 firmware.",
+                    operationMessage = "Reconnect after installing matching v5 firmware.",
                 )
             }
         }
@@ -446,11 +455,21 @@ class DatasetController(
                 status.bytesWritten,
                 status.freeBytes,
             )
+            is DeviceStatus.PausedForOffload -> CollectionState.PausedForOffload(
+                status.label,
+                status.file,
+                status.elapsedMillis,
+                status.freeBytes,
+            )
             is DeviceStatus.Fault -> CollectionState.Fault(status.code, status.activeFileName, status.freeBytes)
         }
         _state.update { it.copy(collection = collection) }
         when (status) {
             is DeviceStatus.Recording -> {
+                continuousSessionActive = true
+                ensureAutoOffloadLoop()
+            }
+            is DeviceStatus.PausedForOffload -> {
                 continuousSessionActive = true
                 ensureAutoOffloadLoop()
             }
@@ -625,13 +644,16 @@ class DatasetController(
         if (_state.value.transfer.isBusy) return true
         try {
             applyStatus(requestStatusLocked())
+            if (_state.value.collection is CollectionState.Recording) return true
             refreshCatalogLocked()
             val completedFiles = _state.value.catalog.files
                 .filter { it.isComplete && it.identity != null }
                 .sortedBy(DeviceLogFile::name)
             val nextFile = completedFiles.firstOrNull()
             if (nextFile != null) {
-                downloadAndDeleteLocked(nextFile)
+                if (downloadAndDeleteLocked(nextFile)) {
+                    applyStatus(requestStatusLocked())
+                }
                 return true
             }
         } catch (error: Exception) {
@@ -887,6 +909,7 @@ class DatasetController(
         val snapshot = _state.value.collection
         val activeFile = when (snapshot) {
             is CollectionState.Recording -> snapshot.fileName
+            is CollectionState.PausedForOffload -> snapshot.file.name
             is CollectionState.Stopping -> snapshot.fileName
             is CollectionState.Fault -> snapshot.activeFileName
             else -> null
@@ -894,6 +917,7 @@ class DatasetController(
         val freeBytes = when (snapshot) {
             is CollectionState.Idle -> snapshot.freeBytes
             is CollectionState.Recording -> snapshot.freeBytes
+            is CollectionState.PausedForOffload -> snapshot.freeBytes
             is CollectionState.Fault -> snapshot.freeBytes
             else -> null
         }

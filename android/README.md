@@ -4,10 +4,10 @@ Native Android/Kotlin companion app for the Activity Tracker embedded project.
 It communicates directly with the XIAO nRF52840 Sense over BLE and stores data
 locally; there are no accounts, cloud services, or backend.
 
-The current milestone is BLE dataset protocol v4: continuous segmented IMU
+The current milestone is BLE dataset protocol v5: continuous segmented IMU
 recording, locked-screen resumable downloads, exact size/CRC32 verification, and
 automatic deletion of only a durably verified board copy. Firmware and Android
-v4 must be upgraded together.
+v5 must be upgraded together.
 
 ## Current status
 
@@ -15,7 +15,7 @@ Implemented in source:
 
 - BLE scan, GATT connection, MTU request, characteristic subscription, command
   writes, control indications, and file notifications
-- v4 `hello` capability check followed by authoritative `status`
+- v5 `hello` capability check followed by authoritative `status`
 - a dedicated `Data` screen for recording and file recovery
 - atomic `record_start` and recoverable `record_stop` transactions with request
   IDs and timeouts
@@ -52,7 +52,7 @@ android/app/src/main/
   AndroidManifest.xml
   java/pl/edu/activitytracker/
     app/          dependency container
-    ble/          UUIDs, v4 wire codec, and telemetry parsers
+    ble/          UUIDs, v5 wire codec, and telemetry parsers
     data/         BLE/mock sources, dataset controller, and repository
     domain/       protocol, dataset, activity, route, and calorie models
     gps/          phone location tracker
@@ -102,17 +102,18 @@ result is not an accepted pass.
 ## BLE dataset workflow
 
 1. Open `Data` and choose a writable destination with the system folder picker.
-2. Connect and wait for protocol v4 handshake/status synchronization.
+2. Connect and wait for protocol v5 handshake/status synchronization.
 3. Select `walking`, `running`, `cycling`, `sitting`, or `lying`.
 4. Tap `Start`; one atomic `record_start,<id>,<label>` is sent.
-5. At 256 KiB the board finalizes a segment and immediately opens the next one
-   with the same label.
+5. At 1536 KiB, or earlier to preserve the storage reserve, the board finalizes
+   a segment and pauses sampling.
 6. Android automatically creates or resumes `<name>.part` and requests the
-   remaining bytes while recording continues, including with the screen locked.
+   remaining bytes, including with the screen locked.
 7. The partial is renamed only after durable close, size, and CRC32 checks.
 8. Android rereads the final CSV, then automatically requests guarded deletion
-   of the exact board identity. Tap `Stop` to apply the same flow to the final
-   segment and end collection.
+   of the exact board identity. Successful deletion makes firmware open the
+   next segment with the same label. Tap `Stop` to finalize the last segment and
+   end collection.
 
 If BLE is lost while recording, the board continues independently. After the
 next connection, Android repeats `hello` and `status` instead of guessing or
@@ -120,7 +121,7 @@ blindly repeating a mutating command. A failed or interrupted download leaves
 the contiguous partial available for resume.
 
 The complete wire format, response variants, MTU behavior, and error rules are
-defined in [`../docs/ble_protocol_v4.md`](../docs/ble_protocol_v4.md).
+defined in [`../docs/ble_protocol_v5.md`](../docs/ble_protocol_v5.md).
 
 ## Local file safety
 
@@ -170,7 +171,7 @@ The app requests nearby-device Bluetooth permissions for BLE. Location is used
 for the map and phone session, and Android 13+ requires notification permission
 for the foreground location service.
 
-Protocol v4 is intentionally unauthenticated for this laboratory prototype.
+Protocol v5 is intentionally unauthenticated for this laboratory prototype.
 Any nearby client that knows the UUIDs can attempt commands; filename and file
 identity guards prevent accidents but are not access control. Pairing/bonding or
 application-layer authorization is a later milestone.

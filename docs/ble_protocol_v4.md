@@ -1,5 +1,9 @@
 # Activity Tracker BLE dataset protocol v4
 
+> Historical protocol. The current firmware and Android application use
+> [protocol v5](ble_protocol_v5.md), which pauses sampling while a finalized
+> segment is transferred and verified.
+
 Protocol v4 extends v3 with continuous segmented recording and automatic,
 verified offload. Firmware and Android must be upgraded together. The GATT
 UUIDs, newline framing, request IDs, MTU-independent fragmentation, binary file

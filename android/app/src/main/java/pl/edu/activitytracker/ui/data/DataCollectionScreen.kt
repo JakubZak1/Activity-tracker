@@ -89,8 +89,13 @@ fun DataCollectionScreen(
     val collectionIdle = dataset.collection is CollectionState.Idle
     val fileActionsEnabled = ready && collectionIdle && !transferBusy
     val recording = dataset.collection as? CollectionState.Recording
-    var displayedElapsedMillis by remember(recording?.fileName, recording?.elapsedMillis) {
-        mutableLongStateOf(recording?.elapsedMillis ?: 0L)
+    val activeElapsed = when (val collection = dataset.collection) {
+        is CollectionState.Recording -> collection.fileName to collection.elapsedMillis
+        is CollectionState.PausedForOffload -> collection.file.name to collection.elapsedMillis
+        else -> null
+    }
+    var displayedElapsedMillis by remember(activeElapsed?.first, activeElapsed?.second) {
+        mutableLongStateOf(activeElapsed?.second ?: 0L)
     }
     LaunchedEffect(recording?.fileName, recording?.elapsedMillis) {
         val activeRecording = recording ?: return@LaunchedEffect
@@ -133,7 +138,7 @@ fun DataCollectionScreen(
                 Text("Dataset collection", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     if (useMockSource) {
-                        "Interactive protocol v4 segmented-recording simulator"
+                        "Interactive protocol v5 pause/offload/resume simulator"
                     } else {
                         "Continuous recording with verified automatic phone offload"
                     },
@@ -210,7 +215,9 @@ fun DataCollectionScreen(
                         }
                         Button(
                             onClick = onStop,
-                            enabled = ready && dataset.collection is CollectionState.Recording && !transferBusy,
+                            enabled = ready &&
+                                (dataset.collection is CollectionState.Recording ||
+                                    dataset.collection is CollectionState.PausedForOffload),
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = null)
                             Text("Stop")
@@ -295,6 +302,13 @@ private fun CollectionDetails(state: CollectionState, displayedElapsedMillis: Lo
             Text("Written: ${formatBytes(state.bytesWritten)}")
             Text("Free space: ${state.freeBytes?.let(::formatBytes) ?: "--"}")
         }
+        is CollectionState.PausedForOffload -> {
+            Text("Paused for verified offload")
+            Text("Activity: ${state.label.displayName}")
+            Text("Closed segment: ${state.file.name}")
+            Text("Elapsed: ${formatElapsed(state.elapsedMillis)}")
+            Text("Free space: ${formatBytes(state.freeBytes)}")
+        }
         is CollectionState.Stopping -> Text("Stopping ${state.fileName ?: "recording"}...")
         is CollectionState.Fault -> Text("Device fault: ${state.code}", color = MaterialTheme.colorScheme.error)
         is CollectionState.Error -> Text("Error: ${state.message}", color = MaterialTheme.colorScheme.error)
@@ -373,7 +387,7 @@ private fun DatasetConnectionState.label(): String = when (this) {
     DatasetConnectionState.Offline -> "Disconnected"
     DatasetConnectionState.Connecting -> "Scanning or connecting..."
     DatasetConnectionState.Handshaking -> "Connected; checking protocol..."
-    DatasetConnectionState.Synchronizing -> "Protocol v4; synchronizing..."
+    DatasetConnectionState.Synchronizing -> "Protocol v5; synchronizing..."
     is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)"
     is DatasetConnectionState.Incompatible -> "Incompatible: $message"
     is DatasetConnectionState.Error -> "Error: $message"

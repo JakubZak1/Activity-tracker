@@ -17,8 +17,24 @@ bool RecordingMachine::begin() {
   return true;
 }
 
-bool RecordingMachine::complete() {
+bool RecordingMachine::pauseForOffload() {
   if (state_ != RecordingState::Recording) {
+    return false;
+  }
+  state_ = RecordingState::PausedForOffload;
+  return true;
+}
+
+bool RecordingMachine::resumeAfterOffload() {
+  if (state_ != RecordingState::PausedForOffload) {
+    return false;
+  }
+  state_ = RecordingState::Recording;
+  return true;
+}
+
+bool RecordingMachine::complete() {
+  if (state_ != RecordingState::Recording && state_ != RecordingState::PausedForOffload) {
     return false;
   }
   state_ = RecordingState::Idle;
@@ -69,6 +85,8 @@ const char* recordingStateName(RecordingState state) {
       return "idle";
     case RecordingState::Recording:
       return "recording";
+    case RecordingState::PausedForOffload:
+      return "paused";
     case RecordingState::Fault:
       return "fault";
   }
@@ -85,7 +103,8 @@ RecordStartDecision decideRecordStart(
   if (state == RecordingState::Idle) {
     return RecordStartDecision::Begin;
   }
-  if (activeLabel && requestedLabel && strcmp(activeLabel, requestedLabel) == 0) {
+  if ((state == RecordingState::Recording || state == RecordingState::PausedForOffload) &&
+      activeLabel && requestedLabel && strcmp(activeLabel, requestedLabel) == 0) {
     return RecordStartDecision::Replay;
   }
   return RecordStartDecision::Conflict;

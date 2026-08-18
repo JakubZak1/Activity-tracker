@@ -20,10 +20,10 @@ class BleDatasetProtocolTest {
     @Test
     fun parsesHelloAndAllStatusVariants() {
         val hello = BleDatasetProtocol.parseControlLine(
-            "ok,7,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload",
+            "ok,7,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload",
         ) as DeviceControlResponse.Hello
         assertEquals(7L, hello.requestId)
-        assertEquals(4, hello.protocolVersion)
+        assertEquals(5, hello.protocolVersion)
         assertTrue("crc32" in hello.capabilities)
 
         val idle = BleDatasetProtocol.parseControlLine(
@@ -36,8 +36,16 @@ class BleDatasetProtocolTest {
         ) as DeviceControlResponse.Status
         assertEquals(ActivityType.Running, (recording.value as DeviceStatus.Recording).label)
 
+        val paused = BleDatasetProtocol.parseControlLine(
+            "status,10,paused,cycling,cycling_0044.csv,1572864,1234ABCD,540000,400000",
+        ) as DeviceControlResponse.Status
+        val pausedStatus = paused.value as DeviceStatus.PausedForOffload
+        assertEquals(ActivityType.Cycling, pausedStatus.label)
+        assertEquals("cycling_0044.csv", pausedStatus.file.name)
+        assertEquals("1234ABCD", pausedStatus.file.crc32)
+
         val fault = BleDatasetProtocol.parseControlLine(
-            "status,10,fault,flash_write_failed,running_0043.csv,1700000",
+            "status,11,fault,flash_write_failed,running_0043.csv,1700000",
         ) as DeviceControlResponse.Status
         assertEquals("flash_write_failed", (fault.value as DeviceStatus.Fault).code)
     }
@@ -80,7 +88,7 @@ class BleDatasetProtocolTest {
     @Test
     fun reassemblesFragmentedAndCoalescedControlRecords() {
         val assembler = ControlRecordAssembler()
-        val input = "ok,1,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload\nstatus,2,idle,none,0,none,100\n"
+        val input = "ok,1,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload\nstatus,2,idle,none,0,none,100\n"
             .toByteArray()
         val records = mutableListOf<String>()
         input.forEach { byte -> records += assembler.append(byteArrayOf(byte)) }

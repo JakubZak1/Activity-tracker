@@ -7,6 +7,7 @@ namespace activity_state {
 enum class RecordingState : uint8_t {
   Idle,
   Recording,
+  PausedForOffload,
   Fault,
 };
 
@@ -30,6 +31,8 @@ class RecordingMachine {
   RecordingMachine();
   void reset();
   bool begin();
+  bool pauseForOffload();
+  bool resumeAfterOffload();
   bool complete();
   void fail();
   RecordingState state() const;
