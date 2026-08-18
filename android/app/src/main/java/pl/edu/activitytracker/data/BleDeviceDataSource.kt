@@ -98,6 +98,7 @@ class BleDeviceDataSource(
     private var mtuFallbackJob: Job? = null
     private var phaseTimeoutJob: Job? = null
     private var commandWriteTimeoutJob: Job? = null
+    private var commandWriteRetryJob: Job? = null
     @Volatile
     private var activeScanCallback: ScanCallback? = null
     @Volatile
@@ -109,6 +110,7 @@ class BleDeviceDataSource(
     @Volatile
     private var commandCharacteristic: BluetoothGattCharacteristic? = null
     private var commandWriteInProgress = false
+    private var commandWriteRetryCount = 0
     @Volatile
     private var requestedDeviceId: String? = null
     private var generationCounter = 0L
@@ -379,9 +381,12 @@ class BleDeviceDataSource(
             if (!isActive(gatt, generation) || characteristic.uuid != BleContract.COMMAND_UUID) return
             commandWriteTimeoutJob?.cancel()
             commandWriteTimeoutJob = null
+            commandWriteRetryJob?.cancel()
+            commandWriteRetryJob = null
             synchronized(commandLock) {
                 if (commandQueue.isNotEmpty()) commandQueue.removeFirst()
                 commandWriteInProgress = false
+                commandWriteRetryCount = 0
                 if (status != BluetoothGatt.GATT_SUCCESS) commandQueue.clear()
             }
             if (status != BluetoothGatt.GATT_SUCCESS) {
@@ -561,30 +566,50 @@ class BleDeviceDataSource(
             commandQueue.first()
         }
         val generation = activeGeneration
-        armCommandWriteTimeout(gatt, generation)
-        val started = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val startStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             gatt.writeCharacteristic(
                 characteristic,
                 payload,
                 BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
-            ) == BluetoothStatusCodes.SUCCESS
+            )
         } else {
             @Suppress("DEPRECATION")
             characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
             @Suppress("DEPRECATION")
             characteristic.value = payload
             @Suppress("DEPRECATION")
-            gatt.writeCharacteristic(characteristic)
+            if (gatt.writeCharacteristic(characteristic)) BluetoothStatusCodes.SUCCESS else LEGACY_WRITE_NOT_STARTED
         }
-        if (!started) {
-            commandWriteTimeoutJob?.cancel()
-            commandWriteTimeoutJob = null
-            synchronized(commandLock) {
+        if (startStatus == BluetoothStatusCodes.SUCCESS) {
+            armCommandWriteTimeout(gatt, generation)
+        } else {
+            retryCommandWriteNotStarted(gatt, generation, startStatus)
+        }
+    }
+
+    private fun retryCommandWriteNotStarted(gatt: BluetoothGatt, generation: Long, startStatus: Int) {
+        val shouldRetry = synchronized(commandLock) {
+            commandWriteInProgress = false
+            if (commandQueue.isEmpty() || commandWriteRetryCount >= MAX_COMMAND_WRITE_START_RETRIES) {
                 commandQueue.clear()
-                commandWriteInProgress = false
+                commandWriteRetryCount = 0
+                false
+            } else {
+                commandWriteRetryCount += 1
+                true
             }
-            emitRaw("command_error", "write_not_started")
-            emitProtocolFault(activeGeneration, "command_write_not_started")
+        }
+        if (!shouldRetry) {
+            emitRaw("command_error", "write_not_started,status=$startStatus")
+            emitProtocolFault(generation, "command_write_not_started:$startStatus")
+            return
+        }
+
+        emitRaw("command_retry", "write_not_started,status=$startStatus,attempt=$commandWriteRetryCount")
+        commandWriteRetryJob?.cancel()
+        commandWriteRetryJob = scope.launch {
+            delay(COMMAND_WRITE_START_RETRY_DELAY_MS)
+            if (isActive(gatt, generation)) writeNextCommandFragment()
         }
     }
 
@@ -665,6 +690,7 @@ class BleDeviceDataSource(
         synchronized(commandLock) {
             commandQueue.clear()
             commandWriteInProgress = false
+            commandWriteRetryCount = 0
         }
         protocolOverflowReported.set(false)
         fileFramesSuppressed.set(false)
@@ -711,6 +737,8 @@ class BleDeviceDataSource(
         cancelPhaseTimeout()
         commandWriteTimeoutJob?.cancel()
         commandWriteTimeoutJob = null
+        commandWriteRetryJob?.cancel()
+        commandWriteRetryJob = null
     }
 
     private fun emitRaw(source: String, payload: String, timestamp: Long = System.currentTimeMillis()) {
@@ -728,6 +756,9 @@ class BleDeviceDataSource(
         private const val SERVICE_DISCOVERY_TIMEOUT_MS = 10_000L
         private const val GATT_OPERATION_TIMEOUT_MS = 5_000L
         private const val GATT_CACHE_REFRESH_DELAY_MS = 1_000L
+        private const val COMMAND_WRITE_START_RETRY_DELAY_MS = 75L
+        private const val MAX_COMMAND_WRITE_START_RETRIES = 6
+        private const val LEGACY_WRITE_NOT_STARTED = -1
         private const val PROTOCOL_EVENT_CAPACITY = 64
         private const val MAX_QUEUED_COMMAND_FRAGMENTS = 32
         private val CLIENT_CHARACTERISTIC_CONFIG_UUID =
