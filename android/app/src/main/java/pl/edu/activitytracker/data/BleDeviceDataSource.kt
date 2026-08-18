@@ -88,6 +88,8 @@ class BleDeviceDataSource(
     private val notificationQueue = ArrayDeque<NotificationRegistration>()
     private val commandQueue = ArrayDeque<ByteArray>()
     private val commandLock = Any()
+    private val cacheRefreshLock = Any()
+    private val cacheRefreshAttemptedDeviceIds = mutableSetOf<String>()
     private val controlAssembler = ControlRecordAssembler()
 
     @Volatile
@@ -320,18 +322,25 @@ class BleDeviceDataSource(
             commandCharacteristic = service.getCharacteristic(BleContract.COMMAND_UUID)
                 ?: return failAndClose(gatt, generation, "Command characteristic not found")
 
-            val required = listOf(
+            val requiredDefinitions = listOf(
                 BleContract.CURRENT_ACTIVITY_UUID to false,
                 BleContract.SUMMARY_UUID to false,
                 BleContract.BATTERY_UUID to false,
                 BleContract.CONTROL_RESPONSE_UUID to true,
                 BleContract.FILE_DATA_UUID to false,
-            ).map { (uuid, indication) ->
+            )
+            val required = requiredDefinitions.map { (uuid, indication) ->
                 service.getCharacteristic(uuid)?.let { NotificationRegistration(it, indication) }
             }
             if (required.any { it == null }) {
-                failAndClose(gatt, generation, "Required BLE v3 characteristics not found")
+                val missing = requiredDefinitions.mapIndexedNotNull { index, definition ->
+                    definition.first.takeIf { required[index] == null }
+                }
+                recoverFromStaleGattCache(gatt, generation, missing)
                 return
+            }
+            synchronized(cacheRefreshLock) {
+                cacheRefreshAttemptedDeviceIds.remove(gatt.device.address)
             }
             notificationQueue.clear()
             required.filterNotNullTo(notificationQueue)
@@ -510,6 +519,39 @@ class BleDeviceDataSource(
         }
     }
 
+    private fun recoverFromStaleGattCache(
+        gatt: BluetoothGatt,
+        generation: Long,
+        missingCharacteristics: List<UUID>,
+    ) {
+        if (!isActive(gatt, generation)) return
+        val deviceId = gatt.device.address
+        val firstAttempt = synchronized(cacheRefreshLock) {
+            cacheRefreshAttemptedDeviceIds.add(deviceId)
+        }
+        val missing = missingCharacteristics.joinToString(separator = ";")
+        emitRaw("gatt_cache", "missing=$missing,refresh_attempt=$firstAttempt")
+        if (!firstAttempt || !refreshGattCache(gatt)) {
+            failAndClose(gatt, generation, "Required BLE v3 characteristics not found: $missing")
+            return
+        }
+
+        closeGatt(gatt, generation)
+        _deviceIdentity.value = null
+        _connectionState.value = ConnectionState.Connecting
+        emitRaw("gatt_cache", "refreshed,reconnecting,$deviceId")
+        scope.launch {
+            delay(GATT_CACHE_REFRESH_DELAY_MS)
+            if (connectionDesired) startScan(deviceId)
+        }
+    }
+
+    @SuppressLint("DiscouragedPrivateApi")
+    private fun refreshGattCache(gatt: BluetoothGatt): Boolean = runCatching {
+        val refresh = BluetoothGatt::class.java.getMethod("refresh")
+        refresh.invoke(gatt) as? Boolean ?: false
+    }.getOrDefault(false)
+
     private fun writeNextCommandFragment() {
         val gatt = bluetoothGatt ?: return
         val characteristic = commandCharacteristic ?: return
@@ -685,6 +727,7 @@ class BleDeviceDataSource(
         private const val CONNECT_TIMEOUT_MS = 15_000L
         private const val SERVICE_DISCOVERY_TIMEOUT_MS = 10_000L
         private const val GATT_OPERATION_TIMEOUT_MS = 5_000L
+        private const val GATT_CACHE_REFRESH_DELAY_MS = 1_000L
         private const val PROTOCOL_EVENT_CAPACITY = 64
         private const val MAX_QUEUED_COMMAND_FRAGMENTS = 32
         private val CLIENT_CHARACTERISTIC_CONFIG_UUID =
