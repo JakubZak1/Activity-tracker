@@ -111,7 +111,7 @@ Incomplete files caused by power loss or write/finalization failure are listed a
 
 BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Its physical segment-boundary timing and pause/offload/resume cycle remain pending hardware tests.
+The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing and locked-screen recovery pass; the physical 1536 KiB pause/offload/resume boundary remains pending.
 
 ## Android MVP App
 
