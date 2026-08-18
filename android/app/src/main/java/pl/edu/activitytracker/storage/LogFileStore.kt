@@ -44,6 +44,22 @@ interface DatasetFileStore {
     fun isFolderAvailable(treeUri: String): Boolean = true
 }
 
+internal enum class PartialArtifactAction {
+    Create,
+    Resume,
+    Quarantine,
+}
+
+internal fun partialArtifactAction(
+    partialExists: Boolean,
+    metadataExists: Boolean,
+    metadataMatches: Boolean,
+): PartialArtifactAction = when {
+    !partialExists && !metadataExists -> PartialArtifactAction.Create
+    partialExists && metadataExists && metadataMatches -> PartialArtifactAction.Resume
+    else -> PartialArtifactAction.Quarantine
+}
+
 class LogFileStore(context: Context) : DatasetFileStore {
     private val appContext = context.applicationContext
 
@@ -124,22 +140,35 @@ class LogFileStore(context: Context) : DatasetFileStore {
         }
 
         var partial = tree.findFile(partialName)
-        var metadata = tree.findFile(metadataName)
+        var metadata = tree.findFile(metadataName) ?: tree.findFile("$metadataName.txt")
+        val artifactAction = partialArtifactAction(
+            partialExists = partial != null,
+            metadataExists = metadata != null,
+            metadataMatches = metadata?.let(::readText) == expectedMetadata,
+        )
 
-        if (partial == null && metadata == null) {
+        if (artifactAction == PartialArtifactAction.Quarantine) {
+            val recoveryFailure = quarantinePartialArtifacts(tree, file.name, partial, metadata)
+            if (recoveryFailure != null) {
+                return DatasetFileStore.PrepareResult.Failure(recoveryFailure)
+            }
+            partial = null
+            metadata = null
+        }
+
+        if (artifactAction != PartialArtifactAction.Resume) {
             partial = tree.createFile(BINARY_MIME_TYPE, partialName)
                 ?: return DatasetFileStore.PrepareResult.Failure("Could not create partial file")
-            metadata = tree.createFile(TEXT_MIME_TYPE, metadataName)
+            metadata = tree.createFile(BINARY_MIME_TYPE, metadataName)
             if (metadata == null || !writeText(metadata, expectedMetadata)) {
                 partial.delete()
                 metadata?.delete()
                 return DatasetFileStore.PrepareResult.Failure("Could not create partial-file metadata")
             }
-        } else if (partial == null || metadata == null) {
-            return DatasetFileStore.PrepareResult.Failure("Partial file metadata is incomplete; remove the stale .part files")
-        } else if (readText(metadata) != expectedMetadata) {
-            return DatasetFileStore.PrepareResult.Failure("Partial file belongs to different remote data")
         }
+
+        partial ?: return DatasetFileStore.PrepareResult.Failure("Could not recover partial file")
+        metadata ?: return DatasetFileStore.PrepareResult.Failure("Could not recover partial-file metadata")
 
         if (!partial.isFile || !metadata.isFile || partial.length() > file.sizeBytes) {
             return DatasetFileStore.PrepareResult.Failure("Partial file has an invalid size or type")
@@ -272,8 +301,34 @@ class LogFileStore(context: Context) : DatasetFileStore {
             file.sizeBytes in 0L..0xFFFF_FFFFL &&
             file.crc32.matches(Regex("[0-9A-F]{8}"))
 
+    private fun quarantinePartialArtifacts(
+        tree: DocumentFile,
+        finalName: String,
+        partial: DocumentFile?,
+        metadata: DocumentFile?,
+    ): String? {
+        val index = (1..MAX_STALE_ARTIFACTS).firstOrNull { candidate ->
+            tree.findFile("$finalName.stale-$candidate.part") == null &&
+                tree.findFile("$finalName.stale-$candidate.part.meta") == null
+        } ?: return "Could not preserve stale partial files: too many recovery copies"
+
+        if (partial != null && !partial.renameTo("$finalName.stale-$index.part")) {
+            if (partial.length() != 0L || !partial.delete()) {
+                return "Could not preserve stale partial data; choose a different folder or rename it manually"
+            }
+        }
+        if (metadata != null && !metadata.renameTo("$finalName.stale-$index.part.meta")) {
+            // A metadata-only artifact contains no CSV bytes. Deleting it is
+            // safe only after any partial payload has already been preserved.
+            if (!metadata.delete()) {
+                return "Could not preserve stale partial metadata; choose a different folder or rename it manually"
+            }
+        }
+        return null
+    }
+
     companion object {
         private const val BINARY_MIME_TYPE = "application/octet-stream"
-        private const val TEXT_MIME_TYPE = "text/plain"
+        private const val MAX_STALE_ARTIFACTS = 999
     }
 }
