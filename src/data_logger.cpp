@@ -756,10 +756,6 @@ DeleteResult deleteLogFile(const char* path, uint32_t expectedSize, uint32_t exp
 
 bool beginFileRead(const char* path, uint32_t offset, LogFileInfo& info) {
   clearError();
-  if (logFile.isOpen()) {
-    setError("busy_recording");
-    return false;
-  }
   if (!getLogFileInfo(path, info)) {
     return false;
   }

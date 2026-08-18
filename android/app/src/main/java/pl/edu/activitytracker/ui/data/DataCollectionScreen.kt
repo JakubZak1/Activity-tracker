@@ -132,7 +132,11 @@ fun DataCollectionScreen(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("Dataset collection", style = MaterialTheme.typography.headlineSmall)
                 Text(
-                    if (useMockSource) "Interactive protocol v3 simulator" else "Record and safely download board CSV logs",
+                    if (useMockSource) {
+                        "Interactive protocol v4 segmented-recording simulator"
+                    } else {
+                        "Continuous recording with verified automatic phone offload"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
@@ -163,7 +167,13 @@ fun DataCollectionScreen(
             ElevatedCard(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Storage folder", style = MaterialTheme.typography.titleMedium)
-                    Text(if (dataset.dataFolderUri == null) "Required before recording" else "Folder permission stored")
+                    Text(
+                        if (dataset.dataFolderUri == null) {
+                            "Required before recording"
+                        } else {
+                            "Folder permission stored; closed segments are saved here automatically"
+                        },
+                    )
                     OutlinedButton(onClick = { folderLauncher.launch(null) }, enabled = !transferBusy) {
                         Icon(Icons.Default.Folder, contentDescription = null)
                         Text(if (dataset.dataFolderUri == null) "Choose folder" else "Change folder")
@@ -313,7 +323,7 @@ private fun TransferStatus(state: TransferState, onCancel: () -> Unit) {
                     OutlinedButton(onClick = onCancel) { Text("Cancel") }
                 }
                 is TransferState.Finalizing -> Text("Checking size and CRC32 for ${state.file.name}...")
-                is TransferState.Completed -> Text("Saved and CRC32 verified: ${state.file.name}")
+                is TransferState.Completed -> Text("Saved and CRC32 verified locally: ${state.file.name}")
                 is TransferState.Interrupted -> Text("Interrupted: ${state.message}")
                 is TransferState.Error -> Text("Error: ${state.message}", color = MaterialTheme.colorScheme.error)
             }
@@ -363,7 +373,7 @@ private fun DatasetConnectionState.label(): String = when (this) {
     DatasetConnectionState.Offline -> "Disconnected"
     DatasetConnectionState.Connecting -> "Scanning or connecting..."
     DatasetConnectionState.Handshaking -> "Connected; checking protocol..."
-    DatasetConnectionState.Synchronizing -> "Protocol v3; synchronizing..."
+    DatasetConnectionState.Synchronizing -> "Protocol v4; synchronizing..."
     is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)"
     is DatasetConnectionState.Incompatible -> "Incompatible: $message"
     is DatasetConnectionState.Error -> "Error: $message"

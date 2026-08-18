@@ -23,6 +23,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import pl.edu.activitytracker.data.ActivityTrackerRepository
 import pl.edu.activitytracker.data.DatasetController
+import pl.edu.activitytracker.data.DatasetWorkRuntime
 import pl.edu.activitytracker.data.DeviceDataSource
 import pl.edu.activitytracker.data.MockDeviceDataSource
 import pl.edu.activitytracker.domain.ActivityReading
@@ -132,7 +133,7 @@ class DatasetControllerTest {
         device.handler = { command ->
             when (command) {
                 is DeviceCommand.Hello -> respond(
-                    DeviceControlResponse.Hello(command.requestId, 3, REQUIRED_DATASET_CAPABILITIES),
+                    DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
                 )
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, boardStatus))
                 is DeviceCommand.ListLogs -> respond(DeviceControlResponse.ListEnd(command.requestId, 0))
@@ -221,7 +222,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, 3, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -251,11 +252,8 @@ class DatasetControllerTest {
 
         assertEquals(7L, requestedOffset)
         assertTrue(controller.state.value.transfer is TransferState.Completed)
-        assertTrue(identity in controller.state.value.verifiedFiles)
-
-        controller.deleteLog(file)
-        runCurrent()
         assertEquals(1, deleteCount)
+        assertFalse(identity in controller.state.value.verifiedFiles)
         assertTrue(controller.state.value.catalog.files.isEmpty())
     }
 
@@ -271,7 +269,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, 3, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -321,12 +319,54 @@ class DatasetControllerTest {
         controller.stopRecording()
         runCurrent()
 
-        val completed = controller.state.value.transfer as TransferState.Completed
-        assertTrue(completed.file in controller.state.value.verifiedFiles)
-        val savedFile = controller.state.value.catalog.files.single()
-        controller.deleteLog(savedFile)
-        runCurrent()
+        assertTrue(controller.state.value.transfer is TransferState.Completed)
         assertTrue(controller.state.value.catalog.files.isEmpty())
+    }
+
+    @Test
+    fun recordingRotatesOffloadsAndDeletesClosedSegmentsWhileItContinues() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val mock = MockDeviceDataSource(
+            backgroundScope,
+            connectDelayMillis = 0,
+            frameDelayMillis = 0,
+            segmentMaxSamples = 10,
+        )
+        val store = MemoryFileStore()
+        val runtime = FakeDatasetWorkRuntime()
+        val controller = DatasetController(
+            deviceDataSource = mock,
+            fileStore = store,
+            scope = backgroundScope,
+            ioDispatcher = dispatcher,
+            commandTimeoutMillis = 500,
+            catalogInactivityMillis = 500,
+            fileInactivityMillis = 500,
+            workRuntime = runtime,
+            autoOffloadPollMillis = 50,
+        )
+        controller.setDataFolderUri("memory://logs")
+        mock.connect(null)
+        runCurrent()
+
+        controller.startRecording(ActivityType.Walking)
+        runCurrent()
+        advanceTimeBy(401)
+        runCurrent()
+
+        assertTrue(controller.state.value.collection is CollectionState.Recording)
+        assertTrue(store.partials.isNotEmpty())
+        assertTrue(mock.snapshotClosedLogNames().isEmpty())
+        assertTrue(runtime.running)
+
+        controller.stopRecording()
+        runCurrent()
+        advanceTimeBy(51)
+        runCurrent()
+
+        assertTrue(controller.state.value.collection is CollectionState.Idle)
+        assertTrue(mock.snapshotClosedLogNames().isEmpty())
+        assertFalse(runtime.running)
     }
 
     @Test
@@ -547,6 +587,13 @@ class DatasetControllerTest {
         var stops = 0
         override fun startIfLocationAllowed() { starts += 1 }
         override fun stop() { stops += 1 }
+    }
+
+    private class FakeDatasetWorkRuntime : DatasetWorkRuntime {
+        var running = false
+        override fun setActive(active: Boolean) {
+            running = active
+        }
     }
 
     private class FakeSettingsStore : SettingsDataSource {

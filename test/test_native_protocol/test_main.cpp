@@ -185,6 +185,14 @@ void testStateMachinesAndReplayPolicy() {
       files.transition(activity_state::FileOperation::Listing, activity_state::FileOperation::Idle));
   TEST_ASSERT_FALSE(files.active());
 }
+
+void testSegmentRotationBoundary() {
+  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(0, 256 * 1024UL));
+  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(256 * 1024UL - 1, 256 * 1024UL));
+  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(256 * 1024UL, 256 * 1024UL));
+  TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(256 * 1024UL + 1, 256 * 1024UL));
+  TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(UINT32_MAX, 0));
+}
 }
 
 void setUp() {}
@@ -200,5 +208,6 @@ int main() {
   RUN_TEST(testManagedNames);
   RUN_TEST(testFileMetadataParser);
   RUN_TEST(testStateMachinesAndReplayPolicy);
+  RUN_TEST(testSegmentRotationBoundary);
   return UNITY_END();
 }

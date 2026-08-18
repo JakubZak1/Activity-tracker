@@ -90,4 +90,8 @@ RecordStartDecision decideRecordStart(
   }
   return RecordStartDecision::Conflict;
 }
+
+bool shouldRotateSegment(uint32_t bytesWritten, uint32_t segmentLimitBytes) {
+  return segmentLimitBytes > 0 && bytesWritten >= segmentLimitBytes;
+}
 }

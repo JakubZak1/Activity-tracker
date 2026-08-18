@@ -56,6 +56,7 @@ RecordStartDecision decideRecordStart(
     RecordingState state,
     const char* activeLabel,
     const char* requestedLabel);
+bool shouldRotateSegment(uint32_t bytesWritten, uint32_t segmentLimitBytes);
 }
 
 #endif

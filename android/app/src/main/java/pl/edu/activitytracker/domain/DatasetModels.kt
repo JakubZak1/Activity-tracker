@@ -1,9 +1,17 @@
 package pl.edu.activitytracker.domain
 
-const val DATASET_PROTOCOL_VERSION = 3
+const val DATASET_PROTOCOL_VERSION = 4
 const val MAX_REQUEST_ID = 0xFFFF_FFFFL
 
-val REQUIRED_DATASET_CAPABILITIES = setOf("recording", "catalog", "download", "resume", "crc32")
+val REQUIRED_DATASET_CAPABILITIES = setOf(
+    "recording",
+    "catalog",
+    "download",
+    "resume",
+    "crc32",
+    "segmentation",
+    "auto_offload",
+)
 
 data class RemoteFileIdentity(
     val name: String,

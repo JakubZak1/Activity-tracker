@@ -6,10 +6,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -47,7 +45,7 @@ class DatasetSimulatorUiTest {
     }
 
     @Test
-    fun recordReconnectStopDownloadVerifyAndDelete() {
+    fun recordReconnectStopDownloadVerifyAndAutoDelete() {
         val source = MockDeviceDataSource(testScope, connectDelayMillis = 0L, frameDelayMillis = 0L)
         val controller = DatasetController(
             deviceDataSource = source,
@@ -100,9 +98,8 @@ class DatasetSimulatorUiTest {
         composeRule.onNodeWithText("Saved and CRC32 verified", substring = true).assertIsDisplayed()
 
         val completed = controller.state.value.transfer as TransferState.Completed
-        composeRule.onNodeWithTag("delete-device-log-${completed.file.name}").performScrollTo().performClick()
-        composeRule.onNodeWithTag("confirm-delete-device-log").performClick()
         composeRule.waitUntil(5_000L) { controller.state.value.catalog.files.isEmpty() }
+        assertTrue(completed.file.name.endsWith(".csv"))
         assertTrue(controller.state.value.catalog.files.isEmpty())
     }
 

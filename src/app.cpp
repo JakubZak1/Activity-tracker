@@ -115,7 +115,7 @@ void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) 
   snprintf(
       response,
       sizeof(response),
-      "ok,%lu,hello,3,recording;catalog;download;resume;crc32",
+      "ok,%lu,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload",
       static_cast<unsigned long>(requestId));
   sendResponse(transport, serial, response);
 }
@@ -398,14 +398,6 @@ void dispatchCommand(
     ResponseTransport transport,
     Stream* serial,
     const protocol_v3::Command& command) {
-  if (recordingMachine.state() == activity_state::RecordingState::Recording &&
-      command.type != protocol_v3::CommandType::Hello &&
-      command.type != protocol_v3::CommandType::Status &&
-      command.type != protocol_v3::CommandType::RecordStart &&
-      command.type != protocol_v3::CommandType::RecordStop) {
-    sendError(transport, serial, command.requestId, "busy_recording");
-    return;
-  }
   if (recordingMachine.state() == activity_state::RecordingState::Fault &&
       command.type != protocol_v3::CommandType::Hello &&
       command.type != protocol_v3::CommandType::Status &&
@@ -594,6 +586,47 @@ void loop() {
   if (!data_logger::flushIfNeeded()) {
     copyFault(data_logger::lastError());
     reportRecordingFaultIfNeeded();
+    return;
+  }
+
+  if (activity_state::shouldRotateSegment(
+          data_logger::currentBytesWritten(), app_config::kSegmentMaxBytes)) {
+    char label[app_config::kActivityLabelBufferSize] = {0};
+    strncpy(label, data_logger::currentLabel(), sizeof(label) - 1);
+    data_logger::LogFileInfo completed = {};
+    if (!data_logger::stopSession(completed)) {
+      copyFault(data_logger::lastError());
+      reportRecordingFaultIfNeeded();
+      return;
+    }
+
+    uint32_t totalBytes = 0;
+    uint32_t usedBytes = 0;
+    uint32_t freeBytes = 0;
+    if (!data_logger::getStorageStats(totalBytes, usedBytes, freeBytes) ||
+        freeBytes < app_config::kCriticalFreeBytes) {
+      copyFault("storage_critical");
+      reportRecordingFaultIfNeeded();
+      return;
+    }
+    if (!data_logger::startSession(label)) {
+      copyFault(data_logger::lastError());
+      reportRecordingFaultIfNeeded();
+      return;
+    }
+    nextSampleMs = millis() + app_config::kSampleIntervalMs;
+    if (Serial) {
+      char crcText[9] = {0};
+      crc32::format(completed.crc32, crcText);
+      Serial.print("info,segment_closed,");
+      Serial.print(completed.name);
+      Serial.print(',');
+      Serial.print(completed.sizeBytes);
+      Serial.print(',');
+      Serial.print(crcText);
+      Serial.print(",next,");
+      Serial.println(data_logger::currentLogPath());
+    }
   }
 }
 }

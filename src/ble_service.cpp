@@ -66,6 +66,7 @@ uint32_t transferOffset = 0;
 uint8_t fileFrame[app_config::kBleFileFrameSize] = {0};
 uint16_t fileFrameLength = 0;
 uint16_t fileFrameDataLength = 0;
+uint32_t lastRecordingTransferFrameMs = 0;
 char transportError[64] = {0};
 
 uint32_t startedAtMs = 0;
@@ -368,6 +369,14 @@ void serviceFileTransfer() {
   if (fileOperationMachine.state() != activity_state::FileOperation::Downloading || pendingControlLength != 0 ||
       !Bluefruit.connected() || !fileDataCharacteristic.notifyEnabled()) {
     return;
+  }
+  if (data_logger::isLogging()) {
+    const uint32_t now = millis();
+    if (static_cast<uint32_t>(now - lastRecordingTransferFrameMs) <
+        app_config::kBleTransferFrameIntervalWhileRecordingMs) {
+      return;
+    }
+    lastRecordingTransferFrameMs = now;
   }
   const uint16_t attCapacity = currentAttPayloadCapacity();
   const uint16_t frameCapacity = attCapacity < sizeof(fileFrame) ? attCapacity : sizeof(fileFrame);

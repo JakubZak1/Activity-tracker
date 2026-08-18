@@ -1,6 +1,6 @@
-# Testing BLE v3 without the physical prototype
+# Testing BLE v4 without the physical prototype
 
-This guide defines the software-only verification path for the Activity Tracker BLE dataset protocol v3. It covers host-testable firmware logic, Android JVM tests, APK assembly, an Android emulator smoke test, and the in-app v3 simulator.
+This guide defines the software-only verification path for Activity Tracker BLE dataset protocol v4. It covers host-testable firmware logic, Android JVM tests, APK assembly, an Android emulator smoke test, and the in-app segmented-recording simulator.
 
 Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, battery circuit, power-loss behavior, or real BLE throughput. Those remain hardware acceptance tests.
 
@@ -10,13 +10,13 @@ Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, ba
 | --- | --- | --- |
 | Main firmware cross-build | `pio run -e seeed_xiao_nrf52840_sense` | No |
 | Formatter cross-build | `pio run -e seeed_xiao_nrf52840_sense_formatter` | No |
-| Pure v3 firmware modules | `pio test -e native_protocol_tests` | No |
+| Pure v4 firmware modules | `pio test -e native_protocol_tests` | No |
 | Android JVM tests and APK | `.\gradlew.bat testDebugUnitTest assembleDebug` | No |
 | Android instrumentation smoke | `.\gradlew.bat connectedDebugAndroidTest` on `ActivityTracker_API_35` | No |
-| Android v3 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
+| Android v4 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
 | BLE/QSPI/power acceptance | physical test matrix | Yes |
 
-`native_protocol_tests` and at least one instrumentation smoke test are required v3 integration gates. If the PlatformIO environment or `androidTest` source set is absent, that is missing test coverage, not a passing result. Do not report a command as passed until it exists and exits successfully.
+`native_protocol_tests` and at least one instrumentation smoke test are required v4 integration gates. If the PlatformIO environment or `androidTest` source set is absent, that is missing test coverage, not a passing result. Do not report a command as passed until it exists and exits successfully.
 
 ## 1. PowerShell and MSYS2 setup
 
@@ -70,7 +70,7 @@ pio test -e native_protocol_tests
 The native suite should exercise code that has no Arduino/BLE/flash dependency, including:
 
 - IEEE CRC-32, including the standard `123456789 -> CBF43926` vector and incremental updates;
-- v3 command parsing, exact request-ID propagation, label/name/range validation, and fragmented newline-delimited control input;
+- v4 command parsing, exact request-ID propagation, label/name/range validation, segmentation boundary, and fragmented newline-delimited control input;
 - the recording state machine: idle/start, idempotent same-label start, conflicting start, stop replay, and recording preserved across disconnect;
 - contiguous file-frame decisions for accept, full duplicate, gap, overlap, and overflow;
 - guarded delete metadata checks.
@@ -89,12 +89,12 @@ Pop-Location
 
 The JVM suite should cover at least:
 
-- fragmented v3 control records and request-ID correlation;
+- fragmented v4 control records and request-ID correlation;
 - command timeout and reconciliation behavior;
 - file-frame duplicate/gap/overlap/overflow handling;
 - resume metadata compatibility;
 - byte-count and CRC32 success/failure paths;
-- repository/controller behavior for start, stop, disconnect, reconnect, auto-download, and manual deletion eligibility;
+- repository/controller behavior for start, stop, disconnect, reconnect, continuous segmented offload, CRC gating, and automatic guarded deletion;
 - existing payload and calorie calculations.
 
 The debug APK is generated under `android/app/build/outputs/apk/debug/`. A successful compile alone is not a BLE or emulator result.
@@ -139,7 +139,7 @@ Before running the gate, verify that instrumentation tests exist; Gradle must no
 ```powershell
 Push-Location android
 if (-not (Test-Path '.\app\src\androidTest')) {
-    throw 'Missing androidTest smoke coverage for BLE v3'
+    throw 'Missing androidTest smoke coverage for BLE v4'
 }
 .\gradlew.bat connectedDebugAndroidTest --console=plain
 Pop-Location
@@ -147,7 +147,7 @@ Pop-Location
 
 At minimum, the smoke test should launch `MainActivity`, navigate with the mock source enabled, and prove that the `Data` workflow can reach its recording and completed-download states without crashing.
 
-## 6. Manual v3 simulator scenario
+## 6. Manual v4 simulator scenario
 
 Install and launch the debug app on the running AVD:
 
@@ -169,7 +169,7 @@ Complete this scenario in the emulator:
 5. Tap `Stop`. Confirm that the finalized file reports a size and uppercase CRC32.
 6. Confirm that download starts automatically, finishes without a `.part` file being presented as complete, and marks the CSV verified.
 7. Confirm that deletion is available only for the verified file and still requires the explicit confirmation dialog.
-8. Delete the simulated board copy manually and refresh the catalog.
+8. Confirm the simulated board copy is removed automatically only after local CRC verification.
 
 If a transfer is long enough to expose `Cancel`, also cancel and resume it. Deterministic gap, overlap, CRC mismatch, and timeout cases belong in automated tests rather than relying on UI timing.
 

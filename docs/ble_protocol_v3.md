@@ -1,5 +1,8 @@
 # Activity Tracker BLE dataset protocol v3
 
+> Historical contract. The current paired firmware and Android implementation
+> uses [protocol v4](ble_protocol_v4.md).
+
 This document is the source of truth for dataset recording and CSV transfer.
 The Android application and firmware are upgraded together; v1 and v2 are not
 wire-compatible with v3.

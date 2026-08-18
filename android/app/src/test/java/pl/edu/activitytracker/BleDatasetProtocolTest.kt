@@ -20,10 +20,10 @@ class BleDatasetProtocolTest {
     @Test
     fun parsesHelloAndAllStatusVariants() {
         val hello = BleDatasetProtocol.parseControlLine(
-            "ok,7,hello,3,recording;catalog;download;resume;crc32",
+            "ok,7,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload",
         ) as DeviceControlResponse.Hello
         assertEquals(7L, hello.requestId)
-        assertEquals(3, hello.protocolVersion)
+        assertEquals(4, hello.protocolVersion)
         assertTrue("crc32" in hello.capabilities)
 
         val idle = BleDatasetProtocol.parseControlLine(
@@ -80,7 +80,7 @@ class BleDatasetProtocolTest {
     @Test
     fun reassemblesFragmentedAndCoalescedControlRecords() {
         val assembler = ControlRecordAssembler()
-        val input = "ok,1,hello,3,recording;catalog;download;resume;crc32\nstatus,2,idle,none,0,none,100\n"
+        val input = "ok,1,hello,4,recording;catalog;download;resume;crc32;segmentation;auto_offload\nstatus,2,idle,none,0,none,100\n"
             .toByteArray()
         val records = mutableListOf<String>()
         input.forEach { byte -> records += assembler.append(byteArrayOf(byte)) }

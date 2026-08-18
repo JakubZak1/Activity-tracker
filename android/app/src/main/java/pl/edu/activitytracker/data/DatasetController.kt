@@ -13,6 +13,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -51,6 +52,8 @@ class DatasetController(
     private val commandTimeoutMillis: Long = 5_000L,
     private val catalogInactivityMillis: Long = 10_000L,
     private val fileInactivityMillis: Long = 10_000L,
+    private val workRuntime: DatasetWorkRuntime = DatasetWorkRuntime.NoOp,
+    private val autoOffloadPollMillis: Long = 2_000L,
 ) {
     private data class PendingTransaction(
         val requestId: Long,
@@ -80,6 +83,9 @@ class DatasetController(
     private var connectionHandshakeJob: Job? = null
     @Volatile
     private var activeTransferJob: Job? = null
+    @Volatile
+    private var continuousSessionActive = false
+    private var autoOffloadJob: Job? = null
 
     init {
         scope.launch {
@@ -118,8 +124,11 @@ class DatasetController(
                 )
             }
         }
-        val waiting = _state.value.transfer as? TransferState.WaitingForFolder ?: return
-        if (uri != null) downloadLog(waiting.file)
+        val waiting = _state.value.transfer as? TransferState.WaitingForFolder
+        if (uri != null && waiting != null) downloadLog(waiting.file)
+        if (uri != null && (waiting != null || continuousSessionActive || hasRemoteCompletedFiles())) {
+            ensureAutoOffloadLoop()
+        }
     }
 
     fun requestStatus() {
@@ -165,6 +174,8 @@ class DatasetController(
                 _state.update {
                     it.copy(collection = CollectionState.Starting(activityType), operationMessage = "Starting ${activityType.displayName} recording...")
                 }
+                continuousSessionActive = true
+                ensureAutoOffloadLoop()
                 try {
                     val response = awaitSingle(DeviceCommand.RecordStart(nextRequestId(), activityType))
                     when (response) {
@@ -187,7 +198,8 @@ class DatasetController(
                     }
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
-                    reconcileAfterMutationFailure("Start failed: ${error.userMessage()}")
+                    val status = reconcileAfterMutationFailure("Start failed: ${error.userMessage()}")
+                    if (status !is DeviceStatus.Recording) continuousSessionActive = false
                 }
             }
         }
@@ -223,7 +235,9 @@ class DatasetController(
                     val status = reconcileAfterMutationFailure("Stop response was lost: ${error.userMessage()}")
                     if (status is DeviceStatus.Idle) fileToDownload = status.lastFile?.toDeviceLogFile()
                 }
-                fileToDownload?.let { downloadLocked(it) }
+                if (_state.value.collection is CollectionState.Idle) continuousSessionActive = false
+                fileToDownload?.let { downloadAndDeleteLocked(it) }
+                ensureAutoOffloadLoop()
             }
         }
     }
@@ -231,7 +245,7 @@ class DatasetController(
     fun refreshCatalog() {
         scope.launch {
             runExclusive {
-                if (!isReady() || _state.value.collection !is CollectionState.Idle || _state.value.transfer.isBusy) {
+                if (!isReady() || _state.value.transfer.isBusy) {
                     return@runExclusive
                 }
                 try {
@@ -253,10 +267,10 @@ class DatasetController(
     fun downloadLog(file: DeviceLogFile) {
         scope.launch {
             runExclusive {
-                if (!isReady() || _state.value.collection !is CollectionState.Idle || _state.value.transfer.isBusy) {
+                if (!isReady() || _state.value.transfer.isBusy) {
                     return@runExclusive
                 }
-                downloadLocked(file)
+                downloadAndDeleteLocked(file)
             }
         }
     }
@@ -273,56 +287,7 @@ class DatasetController(
     fun deleteLog(file: DeviceLogFile) {
         scope.launch {
             runExclusive {
-                val identity = file.identity ?: return@runExclusive
-                val folder = _state.value.dataFolderUri ?: return@runExclusive
-                if (!isReady() ||
-                    _state.value.collection !is CollectionState.Idle ||
-                    identity !in _state.value.verifiedFiles ||
-                    !file.isComplete ||
-                    _state.value.transfer.isBusy
-                ) {
-                    return@runExclusive
-                }
-                _state.update { it.copy(operationMessage = "Rechecking local size and CRC32 for ${file.name}...") }
-                val stillVerified = withContext(ioDispatcher) { fileStore.isVerified(folder, identity) }
-                if (_state.value.dataFolderUri != folder ||
-                    !isReady() ||
-                    _state.value.collection !is CollectionState.Idle ||
-                    !stillVerified
-                ) {
-                    _state.update {
-                        it.copy(
-                            verifiedFiles = it.verifiedFiles - identity,
-                            operationMessage = if (stillVerified) {
-                                "Delete cancelled because the connection or storage folder changed."
-                            } else {
-                                "Delete blocked: the local file is missing, inaccessible, or no longer matches CRC32."
-                            },
-                        )
-                    }
-                    return@runExclusive
-                }
-                _state.update { it.copy(operationMessage = "Deleting ${file.name} from the device...") }
-                try {
-                    when (val response = awaitSingle(DeviceCommand.Delete(nextRequestId(), identity))) {
-                        is DeviceControlResponse.Deleted -> {
-                            if (response.fileName != file.name) throw ProtocolException("Delete response names a different file")
-                            _state.update { current ->
-                                current.copy(
-                                    catalog = removeCatalogFile(current.catalog, file.name),
-                                    verifiedFiles = current.verifiedFiles - identity,
-                                    operationMessage = null,
-                                )
-                            }
-                        }
-                        is DeviceControlResponse.Error -> throw DeviceRejectedException(response)
-                        else -> throw ProtocolException("Unexpected response to delete")
-                    }
-                } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    showOperationError("Delete failed: ${error.userMessage()}")
-                    reconcileAfterMutationFailure("Delete outcome is unknown; refresh the catalog before retrying.")
-                }
+                deleteVerifiedLocked(file, requireIdle = true)
             }
         }
     }
@@ -412,7 +377,7 @@ class DatasetController(
             val hello = awaitSingle(DeviceCommand.Hello(nextRequestId()))
             ensureConnectionSession(expectedGeneration, expectedIdentity)
             if (hello !is DeviceControlResponse.Hello) {
-                throw ProtocolException("Device did not return a v3 hello response")
+                throw ProtocolException("Device did not return a v4 hello response")
             }
             val missing = REQUIRED_DATASET_CAPABILITIES - hello.capabilities
             if (hello.protocolVersion != DATASET_PROTOCOL_VERSION || missing.isNotEmpty()) {
@@ -421,9 +386,9 @@ class DatasetController(
                 _state.update {
                     it.copy(
                         connection = DatasetConnectionState.Incompatible(
-                            "Expected protocol 3 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
+                            "Expected protocol 4 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
                         ),
-                        operationMessage = "Install matching Android and firmware v3 builds.",
+                        operationMessage = "Install matching Android and firmware v4 builds.",
                     )
                 }
                 return
@@ -435,20 +400,19 @@ class DatasetController(
             readyInfo = DatasetConnectionState.Ready(hello.protocolVersion, hello.capabilities, expectedIdentity)
             readyGeneration = expectedGeneration
             _state.update { it.copy(connection = requireNotNull(readyInfo), operationMessage = null) }
-            if (status is DeviceStatus.Idle) {
-                try {
-                    refreshCatalogLocked()
-                    ensureConnectionSession(expectedGeneration, expectedIdentity)
-                } catch (error: Exception) {
-                    if (error is CancellationException) throw error
-                    _state.update {
-                        it.copy(
-                            catalog = CatalogState.Error(error.userMessage(), it.catalog.files),
-                            operationMessage = "Connected, but catalog sync failed: ${error.userMessage()}",
-                        )
-                    }
+            try {
+                refreshCatalogLocked()
+                ensureConnectionSession(expectedGeneration, expectedIdentity)
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                _state.update {
+                    it.copy(
+                        catalog = CatalogState.Error(error.userMessage(), it.catalog.files),
+                        operationMessage = "Connected, but catalog sync failed: ${error.userMessage()}",
+                    )
                 }
             }
+            if (continuousSessionActive || hasRemoteCompletedFiles()) ensureAutoOffloadLoop()
         } catch (error: Exception) {
             if (error is CancellationException) throw error
             if (!isConnectionSessionActive(expectedGeneration, expectedIdentity)) return
@@ -458,7 +422,7 @@ class DatasetController(
                 it.copy(
                     connection = DatasetConnectionState.Error("Handshake failed: ${error.userMessage()}"),
                     collection = CollectionState.Unknown,
-                    operationMessage = "Reconnect after installing matching v3 firmware.",
+                    operationMessage = "Reconnect after installing matching v4 firmware.",
                 )
             }
         }
@@ -485,6 +449,14 @@ class DatasetController(
             is DeviceStatus.Fault -> CollectionState.Fault(status.code, status.activeFileName, status.freeBytes)
         }
         _state.update { it.copy(collection = collection) }
+        when (status) {
+            is DeviceStatus.Recording -> {
+                continuousSessionActive = true
+                ensureAutoOffloadLoop()
+            }
+            is DeviceStatus.Idle,
+            is DeviceStatus.Fault -> continuousSessionActive = false
+        }
     }
 
     private suspend fun refreshCatalogLocked() {
@@ -560,6 +532,118 @@ class DatasetController(
             is DatasetFileStore.PrepareResult.Ready -> receiveDownload(file, prepared.sink, prepared.offset)
         }
     }
+
+    private suspend fun downloadAndDeleteLocked(file: DeviceLogFile): Boolean {
+        val identity = file.identity ?: return false
+        downloadLocked(file)
+        val completed = (_state.value.transfer as? TransferState.Completed)?.file == identity
+        return completed && deleteVerifiedLocked(file, requireIdle = false)
+    }
+
+    private suspend fun deleteVerifiedLocked(file: DeviceLogFile, requireIdle: Boolean): Boolean {
+        val identity = file.identity ?: return false
+        val folder = _state.value.dataFolderUri ?: return false
+        val collectionAllowsDelete = !requireIdle || _state.value.collection is CollectionState.Idle
+        if (!isReady() ||
+            !collectionAllowsDelete ||
+            identity !in _state.value.verifiedFiles ||
+            !file.isComplete ||
+            _state.value.transfer.isBusy
+        ) {
+            return false
+        }
+        _state.update { it.copy(operationMessage = "Rechecking local size and CRC32 for ${file.name}...") }
+        val stillVerified = withContext(ioDispatcher) { fileStore.isVerified(folder, identity) }
+        val collectionStillAllowsDelete = !requireIdle || _state.value.collection is CollectionState.Idle
+        if (_state.value.dataFolderUri != folder || !isReady() || !collectionStillAllowsDelete || !stillVerified) {
+            _state.update {
+                it.copy(
+                    verifiedFiles = it.verifiedFiles - identity,
+                    operationMessage = if (stillVerified) {
+                        "Delete cancelled because the connection or storage folder changed."
+                    } else {
+                        "Delete blocked: the local file is missing, inaccessible, or no longer matches CRC32."
+                    },
+                )
+            }
+            return false
+        }
+        _state.update { it.copy(operationMessage = "Deleting verified ${file.name} from the device...") }
+        return try {
+            when (val response = awaitSingle(DeviceCommand.Delete(nextRequestId(), identity))) {
+                is DeviceControlResponse.Deleted -> {
+                    if (response.fileName != file.name) throw ProtocolException("Delete response names a different file")
+                    _state.update { current ->
+                        current.copy(
+                            catalog = removeCatalogFile(current.catalog, file.name),
+                            verifiedFiles = current.verifiedFiles - identity,
+                            operationMessage = null,
+                        )
+                    }
+                    true
+                }
+                is DeviceControlResponse.Error -> throw DeviceRejectedException(response)
+                else -> throw ProtocolException("Unexpected response to delete")
+            }
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            showOperationError("Delete failed: ${error.userMessage()}")
+            reconcileAfterMutationFailure("Delete outcome is unknown; catalog will be reconciled before retrying.")
+            false
+        }
+    }
+
+    private fun ensureAutoOffloadLoop() {
+        if (autoOffloadJob?.isActive == true) {
+            workRuntime.setActive(true)
+            return
+        }
+        workRuntime.setActive(true)
+        autoOffloadJob = scope.launch {
+            try {
+                delay(autoOffloadPollMillis)
+                while (true) {
+                    val keepRunning = runExclusive { autoOffloadPassLocked() }
+                    if (!keepRunning) break
+                    delay(autoOffloadPollMillis)
+                }
+            } finally {
+                autoOffloadJob = null
+                if (!continuousSessionActive && !hasRemoteCompletedFiles()) {
+                    workRuntime.setActive(false)
+                }
+            }
+        }
+    }
+
+    private suspend fun autoOffloadPassLocked(): Boolean {
+        if (!isReady()) return continuousSessionActive || hasRemoteCompletedFiles()
+        val folder = _state.value.dataFolderUri
+        if (folder == null || !withContext(ioDispatcher) { fileStore.isFolderAvailable(folder) }) {
+            return continuousSessionActive || hasRemoteCompletedFiles()
+        }
+        if (_state.value.transfer.isBusy) return true
+        try {
+            applyStatus(requestStatusLocked())
+            refreshCatalogLocked()
+            val completedFiles = _state.value.catalog.files
+                .filter { it.isComplete && it.identity != null }
+                .sortedBy(DeviceLogFile::name)
+            val nextFile = completedFiles.firstOrNull()
+            if (nextFile != null) {
+                downloadAndDeleteLocked(nextFile)
+                return true
+            }
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            showOperationError("Automatic offload will retry: ${error.userMessage()}")
+            return continuousSessionActive || hasRemoteCompletedFiles()
+        }
+        return continuousSessionActive || hasRemoteCompletedFiles()
+    }
+
+    private fun hasRemoteCompletedFiles(): Boolean =
+        _state.value.catalog.files.any { it.isComplete && it.identity != null }
 
     private suspend fun receiveDownload(
         file: DeviceLogFile,
@@ -771,9 +855,8 @@ class DatasetController(
         target?.events?.close(error)
     }
 
-    private suspend fun runExclusive(block: suspend () -> Unit) {
+    private suspend fun <T> runExclusive(block: suspend () -> T): T =
         operationMutex.withLock { block() }
-    }
 
     private fun nextRequestId(): Long = requestCounter.updateAndGet { current ->
         if (current >= MAX_REQUEST_ID) 1L else current + 1L
