@@ -24,6 +24,10 @@ const SPIFlash_Device_t kFlashDevices[] = {P25Q16H};
 const char* statusMessage = "info,booting";
 unsigned long lastStatusPrintMs = 0;
 
+#ifndef FORCE_EXTERNAL_FLASH_FORMAT
+#define FORCE_EXTERNAL_FLASH_FORMAT 0
+#endif
+
 bool formatExternalFlash() {
   uint8_t workBuffer[4096] = {0};
   FATFS elmchamFatfs;
@@ -111,11 +115,14 @@ void setup() {
   Serial.print("flash_size_bytes,");
   Serial.println(flash.size());
 
-  if (fatfs.begin(&flash)) {
+  if (!FORCE_EXTERNAL_FLASH_FORMAT && fatfs.begin(&flash)) {
     setStatus("ok,already_formatted");
     return;
   }
 
+  if (FORCE_EXTERNAL_FLASH_FORMAT) {
+    Serial.println("warn,force_format_enabled");
+  }
   setStatus("info,formatting_external_flash");
   if (!formatExternalFlash()) {
     setStatus("error,format_failed");

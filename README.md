@@ -236,8 +236,12 @@ pio device monitor
 ```
 
 Expected output is similar to:
-- `ok,already_formatted`
-- or `info,formatting_external_flash` followed by `ok,format_completed`
+- `warn,force_format_enabled`
+- `info,formatting_external_flash`
+- `ok,format_completed`
+
+The formatter environment intentionally erases every existing QSPI file. Build
+or upload it only when the external flash contents may be discarded.
 
 After that, flash the normal logger firmware again.
 
