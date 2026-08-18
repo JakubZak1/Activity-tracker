@@ -28,6 +28,12 @@ The recording machine has four states: `idle`, `recording`, `paused`, and
   deletion cannot compete with IMU sampling.
 - The scheduler never emits catch-up bursts after a delayed loop iteration. A
   late sample advances the next deadline from the current time.
+- The active file is not periodically `sync()`ed during sampling because a
+  physical measurement showed that one QSPI sync blocks the loop for roughly
+  110-160 ms. Finalization still requires successful sync, close, full reread,
+  and CRC verification. A power loss leaves the active `.part` incomplete and
+  may lose its last filesystem-buffered bytes; it is never presented or
+  deleted as a verified CSV.
 - At 1536 KiB, or earlier when needed to retain the 64 KiB storage reserve,
   firmware syncs, closes, rereads, CRC-verifies, and finalizes the active
   segment. It then enters `paused` without opening another file.

@@ -28,6 +28,8 @@ Main onboard resources used right now:
 Normal firmware environment:
 
 - samples IMU data at 50 Hz
+- avoids blocking periodic filesystem sync during sampling; durable sync,
+  close, reread, and CRC verification occur when a segment is finalized
 - boots idle and never creates a dataset session without an explicit start command
 - records one of five labels: `walking`, `running`, `cycling`, `sitting`, or `lying`
 - writes an active session to a temporary file and exposes only finalized CSV files as complete logs

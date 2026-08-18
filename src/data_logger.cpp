@@ -503,12 +503,15 @@ bool writeSample(const IMUSample& sample, const char* label, bool mirrorToSerial
   if (mirrorToSerial) {
     serial.print(line);
   }
-  ++samplesSinceFlush;
+  if (app_config::kFlushEverySamples > 0) {
+    ++samplesSinceFlush;
+  }
   return true;
 }
 
 bool flushIfNeeded() {
-  if (!logFile.isOpen() || samplesSinceFlush < app_config::kFlushEverySamples) {
+  if (!logFile.isOpen() || app_config::kFlushEverySamples == 0 ||
+      samplesSinceFlush < app_config::kFlushEverySamples) {
     return true;
   }
   if (!logFile.sync()) {
