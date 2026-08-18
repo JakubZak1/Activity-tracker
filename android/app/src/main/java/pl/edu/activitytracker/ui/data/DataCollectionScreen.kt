@@ -6,13 +6,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
@@ -60,6 +61,7 @@ import pl.edu.activitytracker.domain.isBusy
 import pl.edu.activitytracker.permissions.AppPermissions
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun DataCollectionScreen(
     paddingValues: PaddingValues,
     state: TrackerState,
@@ -175,8 +177,11 @@ fun DataCollectionScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Recording", style = MaterialTheme.typography.titleMedium)
                     CollectionDetails(dataset.collection, displayedElapsedMillis)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(COLLECTION_ACTIVITIES) { activity ->
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        COLLECTION_ACTIVITIES.forEach { activity ->
                             FilterChip(
                                 selected = selectedActivity == activity,
                                 onClick = { selectedActivityName = activity.wireName },
