@@ -326,6 +326,18 @@ No research dataset has been collected yet. Before recording data intended for M
 
 These utilities prepare the future data workflow; their presence does not mean that a research dataset or ML result exists. The tracked dataset directories are placeholders, raw CSV files are ignored by Git, and any recovered local recordings must be treated as smoke-test material unless they are deliberately admitted to a documented measurement protocol.
 
+Run a read-only timing, bias, noise, clipping, drift, and stationary-sensor
+analysis across one CSV file or a directory:
+
+```powershell
+python tools/analyze_imu_quality.py --stationary dataset/raw/phone_validation_v5/walking_hour
+```
+
+The stationary pass/fail limits are engineering smoke-test heuristics, not a
+calibration certificate. Keep calibration fixtures separate from the research
+dataset and its manifest. The controlled six-position fixture and acceptance
+checks are documented in [docs/imu_validation_protocol.md](docs/imu_validation_protocol.md).
+
 Local dataset folders:
 
 - `dataset/raw/own/` copied CSV logs from this device
