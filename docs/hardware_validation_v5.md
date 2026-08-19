@@ -225,6 +225,22 @@ temperature, not a temperature-characterized certificate. Raw CSV remains
 unchanged. The future training and embedded-inference preprocessing paths must
 apply the same device-specific transformation.
 
+## Locked-screen full-segment test with dedicated IMU task
+
+After the acquisition-task and UI-clock fixes, a stationary locked-screen run
+produced two consecutive near-maximum segments:
+
+| File | Duration | Rows | Bytes | Effective rate | CRC32 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `sitting_10.csv` | 504.077 s | 26,213 | 1,572,888 | 52.000 Hz | `8F0EBB74` |
+| `sitting_11.csv` | 500.596 s | 26,032 | 1,562,066 | 52.000 Hz | `729A65A6` |
+
+Across both files, all 52,243 timestamp intervals were 19 or 20 ms. There were
+no schema issues, gravity/gyro stationary outliers, or clipping. The test
+physically covers sustained acquisition during repeated QSPI sector erases,
+automatic pause/offload, local CRC verification, guarded board deletion, and
+same-label continuation while the phone is locked.
+
 ## Remaining physical work
 
 The core locked-screen segmentation/offload workflow now passes. Separate
