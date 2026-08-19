@@ -15,10 +15,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CalorieCalculator
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DatasetState
 import pl.edu.activitytracker.domain.DeviceLogFile
+import pl.edu.activitytracker.domain.SensorPlacement
 import pl.edu.activitytracker.domain.LocationSample
 import pl.edu.activitytracker.domain.LocationStatus
 import pl.edu.activitytracker.domain.RawDeviceEvent
@@ -226,7 +228,11 @@ class ActivityTrackerRepository(
 
     fun requestStatus() = datasetController.requestStatus()
 
-    fun startDataCollection(activityType: ActivityType) = datasetController.startRecording(activityType)
+    fun startDataCollection(
+        activityType: ActivityType,
+        placement: SensorPlacement,
+        bodySide: BodySide,
+    ) = datasetController.startRecording(activityType, placement, bodySide)
 
     fun stopDataCollection() = datasetController.stopRecording()
 

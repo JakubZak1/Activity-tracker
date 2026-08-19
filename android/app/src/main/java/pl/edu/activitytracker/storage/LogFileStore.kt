@@ -9,6 +9,7 @@ import java.io.FileOutputStream
 import java.util.Locale
 import java.util.zip.CRC32
 import pl.edu.activitytracker.domain.DATASET_PROTOCOL_VERSION
+import pl.edu.activitytracker.domain.DatasetSessionMetadata
 import pl.edu.activitytracker.domain.DeviceLogFile
 import pl.edu.activitytracker.domain.RemoteFileIdentity
 
@@ -35,6 +36,7 @@ interface DatasetFileStore {
         treeUri: String,
         deviceIdentity: String,
         file: RemoteFileIdentity,
+        sessionMetadata: DatasetSessionMetadata? = null,
     ): PrepareResult
 
     fun complete(sink: DownloadSink): CompleteResult
@@ -68,6 +70,8 @@ class LogFileStore(context: Context) : DatasetFileStore {
         val tree: DocumentFile,
         val partialDocument: DocumentFile,
         val metadataDocument: DocumentFile,
+        val deviceIdentity: String,
+        val sessionMetadata: DatasetSessionMetadata?,
         private val descriptor: ParcelFileDescriptor,
         private val output: FileOutputStream,
         initialPosition: Long,
@@ -117,6 +121,7 @@ class LogFileStore(context: Context) : DatasetFileStore {
         treeUri: String,
         deviceIdentity: String,
         file: RemoteFileIdentity,
+        sessionMetadata: DatasetSessionMetadata?,
     ): DatasetFileStore.PrepareResult {
         if (!isSafeFile(file)) return DatasetFileStore.PrepareResult.Failure("Invalid remote file metadata")
         val tree = documentTree(treeUri)
@@ -128,6 +133,11 @@ class LogFileStore(context: Context) : DatasetFileStore {
 
         tree.findFile(file.name)?.let { finalDocument ->
             return if (verifyDocument(finalDocument, file)) {
+                if (sessionMetadata != null && !ensureSessionSidecar(tree, deviceIdentity, file, sessionMetadata)) {
+                    return DatasetFileStore.PrepareResult.Failure(
+                        "CSV is verified, but its session metadata could not be saved",
+                    )
+                }
                 val staleMetadata = tree.findFile(metadataName)
                 if (staleMetadata != null && readText(staleMetadata) == expectedMetadata) {
                     tree.findFile(partialName)?.delete()
@@ -187,6 +197,8 @@ class LogFileStore(context: Context) : DatasetFileStore {
                     tree = tree,
                     partialDocument = partial,
                     metadataDocument = metadata,
+                    deviceIdentity = deviceIdentity,
+                    sessionMetadata = sessionMetadata,
                     descriptor = descriptor,
                     output = output,
                     initialPosition = offset,
@@ -217,9 +229,13 @@ class LogFileStore(context: Context) : DatasetFileStore {
 
         androidSink.tree.findFile(androidSink.file.name)?.let { existing ->
             return if (verifyDocument(existing, androidSink.file)) {
-                androidSink.partialDocument.delete()
-                androidSink.metadataDocument.delete()
-                DatasetFileStore.CompleteResult.Success
+                if (writeSessionSidecar(androidSink)) {
+                    androidSink.partialDocument.delete()
+                    androidSink.metadataDocument.delete()
+                    DatasetFileStore.CompleteResult.Success
+                } else {
+                    DatasetFileStore.CompleteResult.Failure("CSV is verified, but its session metadata could not be saved")
+                }
             } else {
                 DatasetFileStore.CompleteResult.Failure("A different local file already uses ${androidSink.file.name}")
             }
@@ -231,8 +247,12 @@ class LogFileStore(context: Context) : DatasetFileStore {
         val finalDocument = androidSink.tree.findFile(androidSink.file.name)
             ?: androidSink.partialDocument.takeIf { it.name == androidSink.file.name }
         return if (finalDocument != null && verifyDocument(finalDocument, androidSink.file)) {
-            androidSink.metadataDocument.delete()
-            DatasetFileStore.CompleteResult.Success
+            if (writeSessionSidecar(androidSink)) {
+                androidSink.metadataDocument.delete()
+                DatasetFileStore.CompleteResult.Success
+            } else {
+                DatasetFileStore.CompleteResult.Failure("CSV is verified, but its session metadata could not be saved")
+            }
         } else {
             // Best effort rollback keeps the sidecar and resumable name together.
             // If the provider cannot roll back, the next prepare() still detects
@@ -280,11 +300,86 @@ class LogFileStore(context: Context) : DatasetFileStore {
         }
     }
 
+    private fun writeSessionSidecar(sink: AndroidDownloadSink): Boolean {
+        val session = sink.sessionMetadata ?: return true
+        return ensureSessionSidecar(sink.tree, sink.deviceIdentity, sink.file, session)
+    }
+
+    private fun ensureSessionSidecar(
+        tree: DocumentFile,
+        deviceIdentity: String,
+        file: RemoteFileIdentity,
+        session: DatasetSessionMetadata,
+    ): Boolean {
+        val sidecarName = "${file.name}.session.json"
+        val expected = sessionMetadataJson(deviceIdentity, file, session)
+        tree.findFile(sidecarName)?.let { existing ->
+            return readText(existing) == expected
+        }
+        val temporaryName = "$sidecarName.part"
+        tree.findFile(temporaryName)?.let { stale ->
+            if (readText(stale) == expected && stale.renameTo(sidecarName)) {
+                return tree.findFile(sidecarName)?.let { readText(it) == expected } == true
+            }
+            if (!stale.delete()) return false
+        }
+        val temporary = tree.createFile(BINARY_MIME_TYPE, temporaryName) ?: return false
+        if (!writeText(temporary, expected)) {
+            temporary.delete()
+            return false
+        }
+        if (!temporary.renameTo(sidecarName)) return false
+        return tree.findFile(sidecarName)?.let { readText(it) == expected } == true
+    }
+
+    private fun sessionMetadataJson(
+        deviceIdentity: String,
+        file: RemoteFileIdentity,
+        session: DatasetSessionMetadata,
+    ): String = buildString {
+        appendLine("{")
+        appendLine("  \"schema_version\": 1,")
+        appendLine("  \"protocol_version\": $DATASET_PROTOCOL_VERSION,")
+        appendLine("  \"device_identity\": \"${jsonEscape(deviceIdentity)}\",")
+        appendLine("  \"file_name\": \"${jsonEscape(file.name)}\",")
+        appendLine("  \"size_bytes\": ${file.sizeBytes},")
+        appendLine("  \"crc32\": \"${file.crc32}\",")
+        appendLine("  \"activity\": \"${session.activity.wireName}\",")
+        appendLine("  \"sensor_placement\": \"${session.placement.wireName}\",")
+        appendLine("  \"body_side\": \"${session.bodySide.wireName}\",")
+        appendLine("  \"session_id\": \"${jsonEscape(session.sessionId)}\",")
+        appendLine("  \"started_at_epoch_ms\": ${session.startedAtEpochMillis}")
+        appendLine("}")
+    }
+
+    private fun jsonEscape(value: String): String = buildString(value.length) {
+        value.forEach { character ->
+            when (character) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (character.code < 0x20) {
+                    append(String.format(Locale.US, "\\u%04X", character.code))
+                } else {
+                    append(character)
+                }
+            }
+        }
+    }
+
     private fun writeText(document: DocumentFile, value: String): Boolean = runCatching {
-        appContext.contentResolver.openOutputStream(document.uri, "wt")?.use { output ->
-            output.write(value.toByteArray(Charsets.UTF_8))
-            output.flush()
-        } != null
+        val descriptor = appContext.contentResolver.openFileDescriptor(document.uri, "rwt")
+            ?: return@runCatching false
+        descriptor.use {
+            FileOutputStream(it.fileDescriptor).use { output ->
+                output.write(value.toByteArray(Charsets.UTF_8))
+                output.flush()
+                it.fileDescriptor.sync()
+            }
+        }
+        true
     }.getOrDefault(false)
 
     private fun readText(document: DocumentFile): String? = runCatching {

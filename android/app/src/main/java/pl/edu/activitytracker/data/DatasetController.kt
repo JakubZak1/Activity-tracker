@@ -1,6 +1,7 @@
 package pl.edu.activitytracker.data
 
 import java.io.ByteArrayOutputStream
+import java.util.UUID
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
@@ -24,11 +25,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DATASET_PROTOCOL_VERSION
 import pl.edu.activitytracker.domain.DatasetConnectionState
+import pl.edu.activitytracker.domain.DatasetSessionMetadata
 import pl.edu.activitytracker.domain.DatasetState
 import pl.edu.activitytracker.domain.DeviceCommand
 import pl.edu.activitytracker.domain.DeviceControlResponse
@@ -40,6 +43,7 @@ import pl.edu.activitytracker.domain.FileTransferValidator
 import pl.edu.activitytracker.domain.MAX_REQUEST_ID
 import pl.edu.activitytracker.domain.REQUIRED_DATASET_CAPABILITIES
 import pl.edu.activitytracker.domain.RemoteFileIdentity
+import pl.edu.activitytracker.domain.SensorPlacement
 import pl.edu.activitytracker.domain.TransferState
 import pl.edu.activitytracker.domain.isBusy
 import pl.edu.activitytracker.storage.DatasetFileStore
@@ -86,6 +90,8 @@ class DatasetController(
     @Volatile
     private var continuousSessionActive = false
     private var autoOffloadJob: Job? = null
+    private var activeDatasetSession: DatasetSessionMetadata? = null
+    private val fileSessionMetadata = mutableMapOf<String, DatasetSessionMetadata>()
 
     init {
         scope.launch {
@@ -145,7 +151,11 @@ class DatasetController(
         }
     }
 
-    fun startRecording(activityType: ActivityType) {
+    fun startRecording(
+        activityType: ActivityType,
+        placement: SensorPlacement = SensorPlacement.Unknown,
+        bodySide: BodySide = BodySide.Unknown,
+    ) {
         if (activityType == ActivityType.Unknown) return
         scope.launch {
             runExclusive {
@@ -170,7 +180,19 @@ class DatasetController(
                     }
                     return@runExclusive
                 }
+                if (placement == SensorPlacement.Unknown || bodySide == BodySide.Unknown) {
+                    showOperationError("Select sensor placement and body side before recording.")
+                    return@runExclusive
+                }
                 val idleState = _state.value.collection as? CollectionState.Idle ?: return@runExclusive
+                val sessionMetadata = DatasetSessionMetadata(
+                    activity = activityType,
+                    placement = placement,
+                    bodySide = bodySide,
+                    sessionId = UUID.randomUUID().toString(),
+                    startedAtEpochMillis = System.currentTimeMillis(),
+                )
+                activeDatasetSession = sessionMetadata
                 _state.update {
                     it.copy(collection = CollectionState.Starting(activityType), operationMessage = "Starting ${activityType.displayName} recording...")
                 }
@@ -180,6 +202,7 @@ class DatasetController(
                     val response = awaitSingle(DeviceCommand.RecordStart(nextRequestId(), activityType))
                     when (response) {
                         is DeviceControlResponse.RecordingStarted -> {
+                            fileSessionMetadata[response.fileName] = sessionMetadata
                             _state.update {
                                 it.copy(
                                     collection = CollectionState.Recording(
@@ -201,6 +224,7 @@ class DatasetController(
                     val status = reconcileAfterMutationFailure("Start failed: ${error.userMessage()}")
                     if (status !is DeviceStatus.Recording && status !is DeviceStatus.PausedForOffload) {
                         continuousSessionActive = false
+                        if (activeDatasetSession === sessionMetadata) activeDatasetSession = null
                     }
                 }
             }
@@ -226,6 +250,9 @@ class DatasetController(
                     when (response) {
                         is DeviceControlResponse.RecordingStopped -> {
                             fileToDownload = response.file?.toDeviceLogFile()
+                            response.file?.let { file ->
+                                activeDatasetSession?.let { metadata -> fileSessionMetadata[file.name] = metadata }
+                            }
                             _state.update {
                                 it.copy(
                                     collection = CollectionState.Idle(response.file),
@@ -240,7 +267,12 @@ class DatasetController(
                 } catch (error: Exception) {
                     if (error is CancellationException) throw error
                     val status = reconcileAfterMutationFailure("Stop response was lost: ${error.userMessage()}")
-                    if (status is DeviceStatus.Idle) fileToDownload = status.lastFile?.toDeviceLogFile()
+                    if (status is DeviceStatus.Idle) {
+                        fileToDownload = status.lastFile?.toDeviceLogFile()
+                        status.lastFile?.let { file ->
+                            activeDatasetSession?.let { metadata -> fileSessionMetadata[file.name] = metadata }
+                        }
+                    }
                 }
                 if (_state.value.collection is CollectionState.Idle) continuousSessionActive = false
                 fileToDownload?.let { downloadAndDeleteLocked(it) }
@@ -466,14 +498,25 @@ class DatasetController(
         _state.update { it.copy(collection = collection) }
         when (status) {
             is DeviceStatus.Recording -> {
+                activeDatasetSession
+                    ?.takeIf { it.activity == status.label }
+                    ?.let { fileSessionMetadata[status.fileName] = it }
                 continuousSessionActive = true
                 ensureAutoOffloadLoop()
             }
             is DeviceStatus.PausedForOffload -> {
+                activeDatasetSession
+                    ?.takeIf { it.activity == status.label }
+                    ?.let { fileSessionMetadata[status.file.name] = it }
                 continuousSessionActive = true
                 ensureAutoOffloadLoop()
             }
-            is DeviceStatus.Idle,
+            is DeviceStatus.Idle -> {
+                status.lastFile?.let { file ->
+                    activeDatasetSession?.let { metadata -> fileSessionMetadata[file.name] = metadata }
+                }
+                continuousSessionActive = false
+            }
             is DeviceStatus.Fault -> continuousSessionActive = false
         }
     }
@@ -533,7 +576,10 @@ class DatasetController(
         }
         val deviceIdentity = readyInfo?.deviceIdentity ?: return
         _state.update { it.copy(transfer = TransferState.Preparing(file), operationMessage = "Preparing ${file.name}...") }
-        when (val prepared = withContext(ioDispatcher) { fileStore.prepare(folder, deviceIdentity, identity) }) {
+        val sessionMetadata = fileSessionMetadata[file.name]
+        when (val prepared = withContext(ioDispatcher) {
+            fileStore.prepare(folder, deviceIdentity, identity, sessionMetadata)
+        }) {
             DatasetFileStore.PrepareResult.AlreadyComplete -> {
                 _state.update {
                     it.copy(
@@ -599,6 +645,7 @@ class DatasetController(
                             operationMessage = null,
                         )
                     }
+                    fileSessionMetadata.remove(file.name)
                     true
                 }
                 is DeviceControlResponse.Error -> throw DeviceRejectedException(response)

@@ -15,6 +15,26 @@ val REQUIRED_DATASET_CAPABILITIES = setOf(
     "imu_drdy104_mean2_52_deadline_guard",
 )
 
+enum class SensorPlacement(val wireName: String, val displayName: String) {
+    Wrist("wrist", "Wrist"),
+    Leg("leg", "Leg"),
+    Unknown("unknown", "Not selected"),
+}
+
+enum class BodySide(val wireName: String, val displayName: String) {
+    Left("left", "Left"),
+    Right("right", "Right"),
+    Unknown("unknown", "Not selected"),
+}
+
+data class DatasetSessionMetadata(
+    val activity: ActivityType,
+    val placement: SensorPlacement,
+    val bodySide: BodySide,
+    val sessionId: String,
+    val startedAtEpochMillis: Long,
+)
+
 data class RemoteFileIdentity(
     val name: String,
     val sizeBytes: Long,

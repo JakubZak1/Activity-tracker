@@ -5,9 +5,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.io.ByteArrayOutputStream
 import java.util.Locale
@@ -67,7 +70,9 @@ class DatasetSimulatorUiTest {
                     useMockSource = true,
                     onConnect = { testScope.launch { source.connect(null) } },
                     onDisconnect = { testScope.launch { source.disconnect() } },
-                    onStart = controller::startRecording,
+                    onStart = { activity, placement, side ->
+                        controller.startRecording(activity, placement, side)
+                    },
                     onStop = controller::stopRecording,
                     onRefresh = controller::refreshCatalog,
                     onDownload = controller::downloadLog,
@@ -81,8 +86,14 @@ class DatasetSimulatorUiTest {
         composeRule.onNodeWithText("Connect simulator").performClick()
         composeRule.waitUntil(5_000L) { controller.state.value.connection is DatasetConnectionState.Ready }
 
-        composeRule.onNodeWithText("Start").performClick()
-        composeRule.waitUntil(5_000L) { controller.state.value.collection is CollectionState.Recording }
+        composeRule.onNodeWithTag("sensor-placement-wrist").performClick()
+        composeRule.onNodeWithTag("body-side-left").performClick()
+        composeRule.onNodeWithTag("start-dataset-recording").performScrollTo().assertIsEnabled().performClick()
+        try {
+            composeRule.waitUntil(5_000L) { controller.state.value.collection is CollectionState.Recording }
+        } catch (error: Throwable) {
+            throw AssertionError("Recording did not start; state=${controller.state.value}", error)
+        }
         composeRule.onNodeWithText("Recording Walking").assertIsDisplayed()
 
         composeRule.onNodeWithText("Disconnect").performClick()
@@ -93,9 +104,11 @@ class DatasetSimulatorUiTest {
                 controller.state.value.collection is CollectionState.Recording
         }
 
-        composeRule.onNodeWithText("Stop").performClick()
+        composeRule.onNodeWithTag("stop-dataset-recording").performScrollTo().performClick()
         composeRule.waitUntil(5_000L) { controller.state.value.transfer is TransferState.Completed }
-        composeRule.onNodeWithText("Saved and CRC32 verified", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Saved and CRC32 verified", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
 
         val completed = controller.state.value.transfer as TransferState.Completed
         composeRule.waitUntil(5_000L) { controller.state.value.catalog.files.isEmpty() }
@@ -121,6 +134,7 @@ class DatasetSimulatorUiTest {
             treeUri: String,
             deviceIdentity: String,
             file: RemoteFileIdentity,
+            sessionMetadata: pl.edu.activitytracker.domain.DatasetSessionMetadata?,
         ): DatasetFileStore.PrepareResult = DatasetFileStore.PrepareResult.Ready(Sink(file), 0L)
 
         override fun complete(sink: DatasetFileStore.DownloadSink): DatasetFileStore.CompleteResult {

@@ -29,11 +29,13 @@ import pl.edu.activitytracker.data.MockDeviceDataSource
 import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.ActivityType
 import pl.edu.activitytracker.domain.BatteryReading
+import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DATASET_PROTOCOL_VERSION
 import pl.edu.activitytracker.domain.DatasetConnectionState
+import pl.edu.activitytracker.domain.DatasetSessionMetadata
 import pl.edu.activitytracker.domain.DeviceCommand
 import pl.edu.activitytracker.domain.DeviceControlResponse
 import pl.edu.activitytracker.domain.DeviceLogFile
@@ -44,6 +46,7 @@ import pl.edu.activitytracker.domain.LocationStatus
 import pl.edu.activitytracker.domain.REQUIRED_DATASET_CAPABILITIES
 import pl.edu.activitytracker.domain.RawDeviceEvent
 import pl.edu.activitytracker.domain.RemoteFileIdentity
+import pl.edu.activitytracker.domain.SensorPlacement
 import pl.edu.activitytracker.domain.SummaryReading
 import pl.edu.activitytracker.domain.TransferState
 import pl.edu.activitytracker.domain.Transport
@@ -142,9 +145,9 @@ class DatasetControllerTest {
         device.connect(null)
         runCurrent()
 
-        controller.startRecording(ActivityType.Walking)
-        controller.startRecording(ActivityType.Walking)
-        controller.startRecording(ActivityType.Walking)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
         runCurrent()
 
         assertEquals(1, startCount)
@@ -183,7 +186,7 @@ class DatasetControllerTest {
         runCurrent()
         device.connect(null)
         runCurrent()
-        controller.startRecording(ActivityType.Walking)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
         runCurrent()
         advanceTimeBy(101)
         runCurrent()
@@ -210,7 +213,7 @@ class DatasetControllerTest {
         device.connect(null)
         runCurrent()
 
-        controller.startRecording(ActivityType.Walking)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
         runCurrent()
 
         assertTrue(device.commands.none { it is DeviceCommand.RecordStart })
@@ -234,6 +237,24 @@ class DatasetControllerTest {
 
         assertTrue(device.commands.none { it is DeviceCommand.RecordStart })
         assertTrue(controller.state.value.operationMessage.orEmpty().contains("unavailable", ignoreCase = true))
+        assertTrue(controller.state.value.collection is CollectionState.Idle)
+    }
+
+    @Test
+    fun startWithoutPlacementNeverSendsRecordStart() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource().apply { installIdleProtocolHandler() }
+        val controller = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        controller.setDataFolderUri("memory://logs")
+        runCurrent()
+        device.connect(null)
+        runCurrent()
+
+        controller.startRecording(ActivityType.Walking)
+        runCurrent()
+
+        assertTrue(device.commands.none { it is DeviceCommand.RecordStart })
+        assertTrue(controller.state.value.operationMessage.orEmpty().contains("placement", ignoreCase = true))
         assertTrue(controller.state.value.collection is CollectionState.Idle)
     }
 
@@ -338,7 +359,7 @@ class DatasetControllerTest {
         runCurrent()
         assertTrue(controller.state.value.connection is DatasetConnectionState.Ready)
 
-        controller.startRecording(ActivityType.Cycling)
+        controller.startRecording(ActivityType.Cycling, SensorPlacement.Leg, BodySide.Right)
         runCurrent()
         assertTrue(controller.state.value.collection is CollectionState.Recording)
         advanceTimeBy(1_001)
@@ -348,6 +369,10 @@ class DatasetControllerTest {
 
         assertTrue(controller.state.value.transfer is TransferState.Completed)
         assertTrue(controller.state.value.catalog.files.isEmpty())
+        val metadata = store.sessions.values.single()
+        assertEquals(ActivityType.Cycling, metadata.activity)
+        assertEquals(SensorPlacement.Leg, metadata.placement)
+        assertEquals(BodySide.Right, metadata.bodySide)
     }
 
     @Test
@@ -376,13 +401,16 @@ class DatasetControllerTest {
         mock.connect(null)
         runCurrent()
 
-        controller.startRecording(ActivityType.Walking)
+        controller.startRecording(ActivityType.Walking, SensorPlacement.Wrist, BodySide.Left)
         runCurrent()
         advanceTimeBy(401)
         runCurrent()
 
         assertTrue(controller.state.value.collection is CollectionState.Recording)
         assertTrue(store.partials.isNotEmpty())
+        assertTrue(store.sessions.isNotEmpty())
+        assertTrue(store.sessions.values.all { it.placement == SensorPlacement.Wrist && it.bodySide == BodySide.Left })
+        assertEquals(1, store.sessions.values.map { it.sessionId }.distinct().size)
         assertTrue(mock.snapshotClosedLogNames().isEmpty())
         assertTrue(runtime.running)
 
@@ -563,6 +591,7 @@ class DatasetControllerTest {
 
     private class MemoryFileStore : DatasetFileStore {
         val partials = mutableMapOf<String, MutableList<Byte>>()
+        val sessions = mutableMapOf<String, DatasetSessionMetadata>()
         private val verified = mutableSetOf<RemoteFileIdentity>()
         var folderAvailable = true
 
@@ -579,8 +608,10 @@ class DatasetControllerTest {
             treeUri: String,
             deviceIdentity: String,
             file: RemoteFileIdentity,
+            sessionMetadata: DatasetSessionMetadata?,
         ): DatasetFileStore.PrepareResult {
             if (file in verified) return DatasetFileStore.PrepareResult.AlreadyComplete
+            sessionMetadata?.let { sessions[file.name] = it }
             val bytes = partials.getOrPut(file.name) { mutableListOf() }
             return DatasetFileStore.PrepareResult.Ready(Sink(file, bytes), bytes.size.toLong())
         }

@@ -10,7 +10,9 @@ import pl.edu.activitytracker.data.ActivityTrackerRepository
 import pl.edu.activitytracker.storage.SettingsStore
 import pl.edu.activitytracker.storage.SettingsUiState
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.DeviceLogFile
+import pl.edu.activitytracker.domain.SensorPlacement
 
 class MainViewModel(
     private val repository: ActivityTrackerRepository,
@@ -36,7 +38,11 @@ class MainViewModel(
 
     fun requestStatus() = repository.requestStatus()
 
-    fun startDataCollection(activityType: ActivityType) = repository.startDataCollection(activityType)
+    fun startDataCollection(
+        activityType: ActivityType,
+        placement: SensorPlacement,
+        bodySide: BodySide,
+    ) = repository.startDataCollection(activityType, placement, bodySide)
 
     fun stopDataCollection() = repository.stopDataCollection()
 

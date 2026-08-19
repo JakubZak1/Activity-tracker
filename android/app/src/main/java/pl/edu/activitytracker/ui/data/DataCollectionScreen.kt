@@ -51,11 +51,13 @@ import java.util.Locale
 import kotlinx.coroutines.delay
 import pl.edu.activitytracker.data.TrackerState
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DatasetConnectionState
 import pl.edu.activitytracker.domain.DeviceLogFile
+import pl.edu.activitytracker.domain.SensorPlacement
 import pl.edu.activitytracker.domain.TransferState
 import pl.edu.activitytracker.domain.isBusy
 import pl.edu.activitytracker.permissions.AppPermissions
@@ -68,7 +70,7 @@ fun DataCollectionScreen(
     useMockSource: Boolean,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onStart: (ActivityType) -> Unit,
+    onStart: (ActivityType, SensorPlacement, BodySide) -> Unit,
     onStop: () -> Unit,
     onRefresh: () -> Unit,
     onDownload: (DeviceLogFile) -> Unit,
@@ -115,6 +117,12 @@ fun DataCollectionScreen(
     }
     var selectedActivityName by rememberSaveable { mutableStateOf(ActivityType.Walking.wireName) }
     val selectedActivity = ActivityType.fromWire(selectedActivityName)
+    var selectedPlacementName by rememberSaveable { mutableStateOf(SensorPlacement.Unknown.wireName) }
+    val selectedPlacement = SENSOR_PLACEMENTS.firstOrNull { it.wireName == selectedPlacementName }
+        ?: SensorPlacement.Unknown
+    var selectedBodySideName by rememberSaveable { mutableStateOf(BodySide.Unknown.wireName) }
+    val selectedBodySide = BODY_SIDES.firstOrNull { it.wireName == selectedBodySideName }
+        ?: BodySide.Unknown
     var pendingDelete by remember { mutableStateOf<DeviceLogFile?>(null) }
 
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
@@ -212,10 +220,43 @@ fun DataCollectionScreen(
                             )
                         }
                     }
+                    Text("Sensor placement (required)", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        SENSOR_PLACEMENTS.forEach { placement ->
+                            FilterChip(
+                                selected = selectedPlacement == placement,
+                                onClick = { selectedPlacementName = placement.wireName },
+                                enabled = collectionIdle && !transferBusy,
+                                label = { Text(placement.displayName) },
+                                modifier = Modifier.testTag("sensor-placement-${placement.wireName}"),
+                            )
+                        }
+                    }
+                    Text("Body side (required)", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        BODY_SIDES.forEach { side ->
+                            FilterChip(
+                                selected = selectedBodySide == side,
+                                onClick = { selectedBodySideName = side.wireName },
+                                enabled = collectionIdle && !transferBusy,
+                                label = { Text(side.displayName) },
+                                modifier = Modifier.testTag("body-side-${side.wireName}"),
+                            )
+                        }
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Button(
-                            onClick = { onStart(selectedActivity) },
-                            enabled = ready && collectionIdle && !transferBusy && dataset.dataFolderUri != null,
+                            onClick = { onStart(selectedActivity, selectedPlacement, selectedBodySide) },
+                            enabled = ready && collectionIdle && !transferBusy && dataset.dataFolderUri != null &&
+                                selectedPlacement != SensorPlacement.Unknown &&
+                                selectedBodySide != BodySide.Unknown,
+                            modifier = Modifier.testTag("start-dataset-recording"),
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null)
                             Text("Start")
@@ -225,6 +266,7 @@ fun DataCollectionScreen(
                             enabled = ready &&
                                 (dataset.collection is CollectionState.Recording ||
                                     dataset.collection is CollectionState.PausedForOffload),
+                            modifier = Modifier.testTag("stop-dataset-recording"),
                         ) {
                             Icon(Icons.Default.Stop, contentDescription = null)
                             Text("Stop")
@@ -395,7 +437,7 @@ private fun DatasetConnectionState.label(): String = when (this) {
     DatasetConnectionState.Connecting -> "Scanning or connecting..."
     DatasetConnectionState.Handshaking -> "Connected; checking protocol..."
     DatasetConnectionState.Synchronizing -> "Protocol v5; synchronizing..."
-    is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)"
+    is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)\nDevice: $deviceIdentity"
     is DatasetConnectionState.Incompatible -> "Incompatible: $message"
     is DatasetConnectionState.Error -> "Error: $message"
 }
@@ -425,3 +467,7 @@ private val COLLECTION_ACTIVITIES = listOf(
     ActivityType.Sitting,
     ActivityType.Lying,
 )
+
+private val SENSOR_PLACEMENTS = listOf(SensorPlacement.Wrist, SensorPlacement.Leg)
+
+private val BODY_SIDES = listOf(BodySide.Left, BodySide.Right)

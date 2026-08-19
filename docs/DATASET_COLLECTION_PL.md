@@ -91,6 +91,16 @@ zbieranie i zweryfikuj rozkłady, zakresy, etykiety i pipeline podziału danych.
 
 ## Metadane obowiązkowe
 
+Aktualna aplikacja wymaga przed `Start` wyboru `Wrist`/`Leg` oraz
+`Left`/`Right`. Po zweryfikowaniu CSV zapisuje obok niego plik
+`<nazwa>.csv.session.json` z aktywnością, miejscem i stroną mocowania, adresem
+BLE płytki, identyfikatorem logicznej sesji, czasem rozpoczęcia, rozmiarem i
+CRC32. Wszystkie segmenty utworzone przez automatyczny podział jednego nagrania
+mają ten sam identyfikator sesji. CSV pozostaje bajtowo niezmieniony.
+
+Pliki sprzed tej wersji aplikacji nie dostaną metadanych wstecznie. Dla nich
+trzeba zachować dotychczasowe notatki ręczne.
+
 Dla każdego pliku zapisz przynajmniej:
 
 - dokładną nazwę pliku;
