@@ -5,6 +5,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -19,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import pl.edu.activitytracker.ui.debug.DebugScreen
+import pl.edu.activitytracker.ui.data.DataCollectionScreen
 import pl.edu.activitytracker.ui.home.HomeScreen
 import pl.edu.activitytracker.ui.map.MapScreen
 import pl.edu.activitytracker.ui.settings.SettingsScreen
@@ -30,6 +32,7 @@ private enum class Destination(
 ) {
     Home("home", "Home", Icons.Default.Home),
     Map("map", "Map", Icons.Default.Map),
+    Data("data", "Data", Icons.Default.Storage),
     Settings("settings", "Settings", Icons.Default.Settings),
     Debug("debug", "Debug", Icons.Default.BugReport),
 }
@@ -74,7 +77,6 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onDisconnect = viewModel::disconnectDevice,
                     onStartSession = viewModel::startSession,
                     onStopSession = viewModel::stopSession,
-                    onRequestStatus = viewModel::requestStatus,
                 )
             }
             composable(Destination.Map.route) {
@@ -84,6 +86,22 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onLocationPermissionGranted = viewModel::startLocationPreview,
                     onMapVisible = viewModel::startLocationPreview,
                     onMapHidden = viewModel::stopLocationPreviewIfNoSession,
+                )
+            }
+            composable(Destination.Data.route) {
+                DataCollectionScreen(
+                    paddingValues = paddingValues,
+                    state = state,
+                    useMockSource = settings.useMockSource,
+                    onConnect = viewModel::connectDevice,
+                    onDisconnect = viewModel::disconnectDevice,
+                    onStart = viewModel::startDataCollection,
+                    onStop = viewModel::stopDataCollection,
+                    onRefresh = viewModel::refreshDataLogs,
+                    onDownload = viewModel::downloadLog,
+                    onDelete = viewModel::deleteDeviceLog,
+                    onCancelTransfer = viewModel::cancelFileTransfer,
+                    onFolderSelected = viewModel::setDataFolderUri,
                 )
             }
             composable(Destination.Settings.route) {

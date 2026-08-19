@@ -1,16 +1,20 @@
 # Activity Tracker
 
-Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. It is being built as a practical foundation for on-device activity recognition, local data logging, and mobile visualization.
+Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. The current milestone is a reliable BLE-controlled workflow for recording labeled IMU sessions, storing them in QSPI flash, and downloading verified CSV files to an Android phone.
 
-The current firmware can:
-- read accelerometer and gyroscope data from the onboard IMU
-- log labeled CSV sessions with timestamps
-- store sessions in the onboard external QSPI flash
-- expose serial commands for inspecting logs and storage usage
-- advertise a BLE GATT service and publish initial mobile telemetry
-- format external flash with a dedicated one-time formatter firmware
+The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v5 is the current source-compatible pair: the firmware and Android app must be upgraded together.
 
-The repository also contains an Android/Kotlin MVP app in `android/`. It can connect directly to the firmware BLE prototype and retains an optional mock source for development without the board.
+Current project status:
+
+- BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
+- The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
+- A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
+- A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. A later long FIFO test exposed word-pattern desynchronization, so those FIFO recordings are diagnostic only. The replacement acquisition runs complete 104 Hz output-register reads in a dedicated high-priority task, averages adjacent pairs to 52 Hz, preallocates each QSPI segment, and stops rather than accepting a raw-frame gap above 22 ms. Its first 30.634 s stationary hardware run produced 1594 valid rows at 52.001 Hz with a maximum raw-frame interval of 9.766 ms; longer and dynamic validation remains pending.
+- There is currently no research dataset. Existing CSV files, if present locally, are smoke-test recordings only.
+- A six-position engineering calibration candidate for `xiao_unit_01` is
+  archived under `calibration/`; these raw files are explicitly excluded from
+  activity training data.
+- There is no trained ML model, no activity-classification inference on the device, and no real step-counting algorithm. Live activity and summary telemetry remain placeholders.
 
 ## Hardware
 
@@ -25,13 +29,25 @@ Main onboard resources used right now:
 ## Current Firmware Features
 
 Normal firmware environment:
-- samples IMU data at 50 Hz
-- stores CSV logs in external flash
-- supports serial commands such as `help`, `status`, `space`, `list`, `read`, `label`, `start`, `stop`, `stream on`, `stream off`, and `erase`
+
+- reads complete 104 Hz accelerometer/gyroscope frames after both data-ready
+  bits are asserted, averages adjacent pairs, and logs a deterministic 52 Hz stream
+- preallocates each 1536 KiB segment before acquisition so FAT cluster
+  allocation cannot stall the sampling loop
+- runs IMU acquisition in a bounded, higher-priority task so physical QSPI
+  erase stalls cannot block sensor reads; queue overflow is a hard fault
+- avoids blocking periodic filesystem sync during sampling; durable sync,
+  close, reread, and CRC verification occur when a segment is finalized
+- boots idle and never creates a dataset session without an explicit start command
+- records one of five labels: `walking`, `running`, `cycling`, `sitting`, or `lying`
+- writes an active session to a temporary file and exposes only finalized CSV files as complete logs
+- keeps recording if the BLE connection is lost; reconnecting clients reconcile state with `status`
+- provides BLE v5 status, recording, paused-offload, catalog, resumable download, cancel, and guarded delete operations
+- closes the active CSV at 1536 KiB (or before the reserve is exhausted), pauses for verified offload, and resumes the same label only after guarded deletion
+- calculates IEEE CRC-32 for finalized CSV bytes
 - reports approximate LiPo battery voltage and percentage
-- advertises as `ActivityTracker` over BLE
-- publishes placeholder activity, summary, and real battery telemetry
-- accepts the BLE command `status`
+- publishes placeholder activity/summary telemetry until ML inference and step counting exist
+- retains serial maintenance commands for development and recovery
 
 Formatter environment:
 - initializes and formats the external flash with a FAT filesystem
@@ -40,11 +56,13 @@ Formatter environment:
 ## Project Structure
 
 - `android/` native Android/Kotlin MVP app
+- `docs/` protocol, recovery, and verification documentation
 - `src/` application source files
 - `src/fatfs/` local FATFS sources used by the formatter firmware
 - `include/` public project headers
 - `lib/` optional local private libraries
 - `test/` test code and test-related notes
+- `tools/` Python utilities for USB download, validation, plots, and feature experiments
 - `platformio.ini` PlatformIO environments and dependencies
 
 Key source modules:
@@ -55,9 +73,9 @@ Key source modules:
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
 
-## Current BLE Prototype
+## BLE Dataset Protocol v5
 
-The normal firmware currently exposes the first test version of the mobile BLE contract. It is intended to verify the complete device-to-phone communication path before the activity recognition model is ready.
+The authoritative wire contract is [docs/ble_protocol_v5.md](docs/ble_protocol_v5.md). Protocol v5 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
 
 The board advertises as:
 
@@ -73,65 +91,48 @@ Service UUID:
 
 Characteristics:
 
-| Name | UUID | Properties | Current payload |
-| --- | --- | --- | --- |
-| `current_activity` | `7b7d0001-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `unknown,0,0` |
-| `battery` | `7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `voltage_mv,percent` |
-| `summary` | `7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `uptime_s,unknown,0` |
-| `command` | `7b7d0004-8f7a-4f6a-9f4f-1d2c3b4a5000` | write, write without response | `status` |
+| Name | UUID | Properties |
+| --- | --- | --- |
+| `current_activity` | `7b7d0001-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify |
+| `activity_summary` | `7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify |
+| `battery` | `7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify |
+| `command` | `7b7d0004-8f7a-4f6a-9f4f-1d2c3b4a5000` | write with response |
+| `control_response` | `7b7d0005-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, indicate |
+| `file_data` | `7b7d0006-8f7a-4f6a-9f4f-1d2c3b4a5000` | notify |
 
-Automatic update frequency:
-- `current_activity`: approximately every 1 second
-- `summary`: approximately every 1 second
-- `battery`: approximately every 30 seconds
+Every command and response carries a request ID. Text control records end with `\n` and are reassembled across GATT packets, so correctness does not depend on the requested MTU 247. Binary file frames carry the request ID, byte offset, and contiguous CSV bytes. Android resumes from the verified length of a `.part` file after interruption.
 
-The current summary duration is temporarily the time since BLE startup. It will become the real inference-session duration when product session handling is implemented.
+### Phone-controlled recording workflow
 
-Writing the UTF-8 command:
+1. In Android, open `Data` and choose a destination folder using the system folder picker.
+2. Connect to the board and wait for the v5 `hello` capability check and `status` reconciliation.
+3. Select exactly one activity label and tap `Start`. Android sends one atomic `record_start` command containing the label.
+4. Record the activity. Losing the BLE connection does not stop the board; after reconnect, Android requests `status` and restores the visible recording state.
+5. At 1536 KiB, or earlier to protect the storage reserve, firmware finalizes the segment and pauses sampling.
+6. A foreground Android service automatically downloads or resumes the closed segment, including while the screen is locked.
+7. Only after durable local save and a second size/CRC32 verification does Android request guarded deletion; successful deletion makes firmware resume the same label.
+8. Tap `Stop` to finalize, offload, and safely delete the last segment.
 
-```text
-status
-```
+Incomplete files caused by power loss or write/finalization failure are listed as incomplete and are not auto-downloaded or deletable through the normal verified-file flow.
 
-causes the firmware to immediately publish all three telemetry values. The BLE callback only records the request; battery reads and notifications are processed later from the main loop.
+### Security and verification status
 
-### Test with nRF Connect
+BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-1. Upload the normal firmware.
-2. Open the serial monitor and confirm:
-
-   ```text
-   info,ble_advertising,ActivityTracker
-   ```
-
-3. Install and open nRF Connect for Mobile on an Android phone.
-4. Scan for and connect to `ActivityTracker`.
-5. Find service `7b7d0000-...-a5000`.
-6. Enable notifications for `current_activity`, `battery`, and `summary`.
-7. Observe automatic text payload updates.
-8. Write UTF-8 `status` to the command characteristic.
-
-If the write editor only accepts hexadecimal bytes, `status` is:
-
-```text
-73 74 61 74 75 73
-```
-
-The serial `status` command now also reports:
-
-```text
-ble_connected,yes
-```
-
-when a phone is connected.
+The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing, stale-partial recovery, and six physical 1536 KiB locked-screen pause/offload/resume cycles pass.
 
 ## Android MVP App
 
-The Android app is a local, Android-only MVP for the product/demo side of the project. It is not a full smartwatch app and does not use accounts, cloud storage, or a backend.
+The Android app is a local, Android-only MVP. It does not use accounts, cloud storage, or a backend.
 
 Current app features:
-- real BLE scan/connect, telemetry notifications, and command writes
-- optional mock device connection for UI and session development
+
+- BLE scan/connect, v5 handshake, status reconciliation, indications, notifications, and queued command writes
+- a `Data` screen for selecting the recorded activity, start/stop, storage status, log catalog, and verified automatic offload
+- continuous segmented CSV offload to a user-selected Storage Access Framework folder
+- a foreground connected-device service and partial wake lock for locked-screen transfer
+- byte-count and CRC32 verification before `.part` is finalized
+- a full v5 mock device for pause/offload/resume development without the board
 - live activity, confidence, battery, session duration, steps, and calories UI
 - MET-based calorie estimate using user weight
 - phone GPS preview on the map
@@ -139,12 +140,16 @@ Current app features:
 - OSMDroid map with route segments colored by activity
 - grouped stop markers for sitting and lying
 - Settings and Debug screens
-- BLE contract v1 constants and text payload parsers
+- protocol/debug events that make request/response failures visible
 
 Current limitations:
-- firmware BLE currently publishes placeholder activity and summary values
-- firmware currently recognizes only the BLE `status` command
-- finished sessions are not persisted/exported yet
+
+- power-loss, transfer-phase disconnect, deliberate CRC corruption, and storage-failure injection remain pending physical tests
+- BLE has no pairing, authentication, application-layer encryption, or authorization
+- firmware publishes placeholder activity, confidence, steps, and summary values
+- there is no ML model or on-device inference
+- there is no real dataset from which classification quality could be reported
+- product/demo sessions and routes are not yet a complete durable history/export feature
 
 Open the Android app in Android Studio by selecting:
 
@@ -152,38 +157,34 @@ Open the Android app in Android Studio by selecting:
 activity_tracker/android
 ```
 
-Build and test from `android/`:
+Build and run JVM tests from `android/`:
 
 ```powershell
-.\gradlew.bat :app:compileDebugKotlin
-.\gradlew.bat :app:testDebugUnitTest
+.\gradlew.bat testDebugUnitTest assembleDebug
 ```
 
-If `java` is not available in `PATH`, use Android Studio's embedded JDK, for example:
+If `java` is not available in `PATH`, point `JAVA_HOME` at Android Studio's
+embedded JDK. With the per-user installation used by this project:
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+$env:JAVA_HOME="$env:LOCALAPPDATA\Programs\android-studio\jbr"
 ```
 
-The app documentation is in:
+If Android Studio was installed in a different location, select its `jbr`
+directory instead.
 
-```text
-android/README.md
-```
+See [android/README.md](android/README.md) for the app architecture and [docs/testing_without_hardware.md](docs/testing_without_hardware.md) for the host and emulator checks.
 
-Recommended demo flow:
-1. Install the app on an Android phone from Android Studio.
-2. Power the XIAO and tap `Scan & connect`.
-3. Grant the nearby-device Bluetooth permissions.
-4. Confirm that the app shows `Connected (ble)` and a real battery value.
-5. Open Map and grant location permission.
-6. Tap `Start session`.
-7. Walk, run, or move with the phone; the app records GPS route points only while the session is active.
-8. Lock the phone if needed; the foreground service keeps session recording alive.
-9. Tap `Stop session`.
+### v5 simulator without the board
 
-For a demo without the board, enable `Mock data source` in Settings and connect
-again.
+1. Open `Settings`, enable `Mock data source`, and return to `Home`.
+2. Tap `Connect mock`.
+3. Open `Data` and choose a writable folder.
+4. Select a label, start recording, and stop it after a few seconds.
+5. Confirm that the simulated log is listed, downloaded automatically, and marked verified only after CRC32 succeeds.
+6. Confirm the verified local copy remains and the simulated board copy is deleted automatically; also exercise disconnect/reconnect and cancel/resume.
+
+The simulator verifies Android state management and protocol handling; it does not validate the nRF52840 BLE stack, radio behavior, QSPI flash, sensor sampling, or power-loss handling.
 
 In the final system split:
 - firmware classifies activity, measures battery, tracks session duration, and later counts steps
@@ -192,14 +193,25 @@ In the final system split:
 ## PlatformIO Environments
 
 Main logger firmware:
+
 ```bash
 pio run -e seeed_xiao_nrf52840_sense
 ```
 
 Formatter firmware:
+
 ```bash
 pio run -e seeed_xiao_nrf52840_sense_formatter
 ```
+
+The v5 integration also requires a host-native protocol test environment:
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
+pio test -e native_protocol_tests
+```
+
+`native_protocol_tests` and at least one Android emulator smoke test are required integration gates for v5. They must not be reported as passed until their environments/tests are present and the commands complete successfully. Setup, expected coverage, and the `ActivityTracker_API_35` AVD flow are documented in [docs/testing_without_hardware.md](docs/testing_without_hardware.md).
 
 ## Upload
 
@@ -237,75 +249,67 @@ pio device monitor
 ```
 
 Expected output is similar to:
-- `ok,already_formatted`
-- or `info,formatting_external_flash` followed by `ok,format_completed`
+- `warn,force_format_enabled`
+- `info,formatting_external_flash`
+- `ok,format_completed`
+
+The formatter environment intentionally erases every existing QSPI file. Build
+or upload it only when the external flash contents may be discarded.
 
 After that, flash the normal logger firmware again.
 
 ## Serial Commands
 
-Main commands in the normal firmware:
-- `help` show available commands
-- `status` print logging state and current file
-- `battery` print battery voltage, approximate percentage, and raw ADC value
-- `space` print total, used, free, and percentage usage of external flash
-- `list` list stored files
-- `read /walking_0000.csv` print a selected file
-- `label walking` set the label for the next logging session
-- `start` start a new logging session
-- `stop` stop logging
+The normal firmware accepts the same newline-delimited v5 control records over
+USB serial as it does over BLE. Choose an unsigned 32-bit request ID for each
+command:
+
+- `hello,<id>` report protocol version and capabilities
+- `status,<id>` report the authoritative recording state and free space
+- `record_start,<id>,<label>` atomically select a label and start recording
+- `record_stop,<id>` finalize the active session and report size plus CRC32
+- `list,<id>` emit `file` records followed by `list_end`
+- `delete,<id>,<name>,<size>,<CRC32>` delete only an exact completed-file identity
+- `cancel,<id>` cancel an active BLE catalog/download operation
+- `help` print the supported console syntax
 - `stream on` mirror live samples to serial
 - `stream off` disable live serial mirroring
-- `erase` remove managed log files
 
-Labels must use lowercase letters, digits, or underscores only. Examples:
+File download remains BLE-only because its data is carried by the binary
+`file_data` characteristic. The console deliberately has no unguarded `erase`
+command and no separate persisted `label` command.
+
+BLE v5 dataset labels are limited to:
+
 - `walking`
 - `running`
+- `cycling`
 - `sitting`
 - `lying`
-- `cycling`
 
-The firmware starts with the default label `sitting` only when no saved label exists yet. The `label` command saves the selected label in external flash, so the board keeps using it after reset or battery power-up.
-
-To change labels, stop the current session first:
-
-```text
-stop
-label walking
-start
-```
-
-Session files are named with the active label and session index, for example:
+The firmware boots idle. Booting, resetting, reconnecting BLE, or disconnecting
+USB does not start a recording. To change labels, stop the current session and
+start a new atomic recording command:
 
 ```text
-/walking_0000.csv
-/running_0001.csv
-/sitting_0002.csv
+record_stop,12
+record_start,13,walking
 ```
 
-## Data Collection Workflow
-
-Recommended recording flow:
-
-1. Flash the main logger firmware.
-2. Open the serial monitor.
-3. Stop the automatic default session if needed with `stop`.
-4. Set the target label, for example `label walking`.
-5. For USB-connected recording, start a fresh session with `start`.
-6. For battery recording, turn the device off, disconnect USB, then turn it on with the switch. It will automatically start logging with the saved label.
-7. Record one clean activity for 2-5 minutes.
-8. Stop the session with `stop` after reconnecting, or turn the device off after a recording if USB is not connected.
-9. Check files with `list` and storage with `space`.
-10. Recover data with `read /walking_0000.csv`.
-
-Battery workflow example:
+Finalized session files use a managed label/index name, for example:
 
 ```text
-stop
-label walking
+walking_0000.csv
+running_0001.csv
+sitting_0002.csv
 ```
 
-Then disconnect USB, turn the device off, mount it on the wrist, and turn it on with the switch. The new session will be named like `/walking_0000.csv`.
+## CSV Format and Pre-Dataset Policy
+
+Use the Android `Data` workflow described above for phone-controlled recordings.
+The serial path uses the same request-ID/state coordinator for diagnostics and
+recovery, but resumable binary download and phone-side CRC verification remain
+BLE/Android responsibilities.
 
 CSV sessions use the training-oriented column set:
 
@@ -317,7 +321,8 @@ Derived values such as roll, pitch, temperature, and IMU address are not stored 
 
 Battery percentage is estimated from LiPo voltage, so treat it as approximate. The value depends on load, charging state, and battery condition.
 
-For the May prototype dataset, keep recordings consistent:
+No research dataset has been collected yet. Before recording data intended for ML, first complete the physical v5 validation, choose a stable mount and orientation, and define the measurement protocol. Future recordings should use:
+
 - same wrist
 - same board orientation
 - same strap or mounting method
@@ -327,7 +332,22 @@ For the May prototype dataset, keep recordings consistent:
 
 ## PC Dataset Tools
 
+These utilities prepare the future data workflow; their presence does not mean that a research dataset or ML result exists. The tracked dataset directories are placeholders, raw CSV files are ignored by Git, and any recovered local recordings must be treated as smoke-test material unless they are deliberately admitted to a documented measurement protocol.
+
+Run a read-only timing, bias, noise, clipping, drift, and stationary-sensor
+analysis across one CSV file or a directory:
+
+```powershell
+python tools/analyze_imu_quality.py --stationary dataset/raw/phone_validation_v5/walking_hour
+```
+
+The stationary pass/fail limits are engineering smoke-test heuristics, not a
+calibration certificate. Keep calibration fixtures separate from the research
+dataset and its manifest. The controlled six-position fixture and acceptance
+checks are documented in [docs/imu_validation_protocol.md](docs/imu_validation_protocol.md).
+
 Local dataset folders:
+
 - `dataset/raw/own/` copied CSV logs from this device
 - `dataset/raw/pamap2/` optional PAMAP2 source files
 - `dataset/processed/` generated intermediate data
@@ -357,40 +377,15 @@ python tools/sync_manifest.py --orientation usb_toward_hand --notes "normal pace
 
 Use `--dry-run` first if you want to preview what would be added. The script skips invalid/empty CSV files and existing manifest entries.
 
-Download a log directly from the board over USB serial:
+Download and verify logs with the Android `Data` screen, then copy the finalized
+CSV files from the selected SAF folder to `dataset/raw/own/` on the PC. The app
+writes `.part` files, supports resume, and exposes the final CSV only after the
+device size and CRC32 both match.
 
-```bash
-python -m pip install pyserial
-python tools/download_log.py --port COM5 --file /walking_0002.csv --output dataset/raw/own/walking_0002.csv
-```
-
-Download all CSV logs from the board:
-
-```bash
-python tools/download_log.py --port COM5 --all --output-dir dataset/raw/own
-```
-
-In `--all` mode, downloaded file names get a timestamp prefix by default, for example:
-
-```text
-20260425_213000_walking_0000.csv
-```
-
-This keeps PC-side files unique even if the board session counter starts from zero again after `erase`. You can choose your own prefix:
-
-```bash
-python tools/download_log.py --port COM5 --all --prefix 20260425_walk_test_01
-```
-
-Existing local files are skipped by default to prevent accidental duplicates or overwrites. Use `--overwrite` only when you intentionally want to replace a local copy.
-
-The downloader also keeps `dataset/downloads.csv`. In `--all` mode it skips device files that were already downloaded with the same device filename and byte size. Use `--ignore-registry` only if you intentionally want to download them again under a new PC-side name.
-
-In `--all` mode the script asks the board for `status` and skips the currently open log file by default. This avoids copying a file while the firmware is still writing it. Use `--stop-first` to close the active session before downloading, or `--include-current` only when you intentionally want to copy the active file.
-
-Downloads are written to a temporary `.part` file first, then validated, then renamed to the final CSV path. If a transfer fails, the partial file is removed.
-
-Use `--stop-first` if the board is still logging and you want to close the current file before reading it.
+`tools/download_log.py` targets the legacy pre-v3 USB `read` protocol and is not
+compatible with the current firmware. BLE v5 intentionally carries file bytes
+only through the binary `file_data` characteristic; do not use the legacy tool
+for new recordings or as evidence that a v5 transfer was verified.
 
 Load all local raw logs and print a quick summary:
 
@@ -411,7 +406,7 @@ Plots are saved to:
 dataset/results/plots/
 ```
 
-Build classical ML feature rows from valid raw logs:
+After a real, validated dataset exists, build classical feature rows from valid raw logs with:
 
 ```bash
 python tools/build_features.py
@@ -429,6 +424,8 @@ For tiny smoke-test files only, use a shorter window:
 python tools/build_features.py --window-s 0.04 --overlap 0 --min-samples 2 --trim-start-s 0 --trim-end-s 0
 ```
 
+There is currently no training/evaluation pipeline, selected classifier, exported embedded model, confusion matrix, or defensible accuracy/F1 result in this repository.
+
 ## Notes
 
 TinyUSB support is enabled with:
@@ -443,14 +440,16 @@ The formatter keeps local FATFS sources in `src/fatfs/` because the one-time for
 
 ## Roadmap
 
-Likely next project stages:
-1. collect labeled datasets for multiple activities
-2. build a PC-side training pipeline
-3. run activity classification on-device in real time
-4. store compact activity summaries instead of raw logs in product mode
-5. replace placeholder BLE activity and summary with inference results
-6. implement firmware handling for BLE session commands
-7. persist and export Android sessions for thesis analysis
+Next project stages:
+
+1. complete native/JVM/emulator verification of protocol v5
+2. validate BLE v5 and QSPI behavior on the repaired physical prototype, including locked-screen pause/offload/resume, corrected sample timing, reconnect, power loss, CRC mismatch, and guarded automatic deletion
+3. define one stable wrist mount, orientation, and measurement protocol
+4. collect and validate the first real five-class dataset
+5. build an offline training/evaluation pipeline with session-level splits
+6. select and export a model, then implement on-device inference and smoothing
+7. implement and evaluate step counting
+8. replace placeholder activity/summary telemetry and complete durable Android session export
 
 ## License
 

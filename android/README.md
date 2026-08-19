@@ -1,256 +1,177 @@
-# Activity Tracker Android MVP
+# Activity Tracker Android app
 
-Native Android/Kotlin MVP for the Activity Tracker embedded project.
+Native Android/Kotlin companion app for the Activity Tracker embedded project.
+It communicates directly with the XIAO nRF52840 Sense over BLE and stores data
+locally; there are no accounts, cloud services, or backend.
 
-The app is Android-only and works locally: no user accounts, no cloud, and no
-backend. It connects directly to the nRF52840 over BLE and also retains a mock
-data source for UI development and demonstrations without the board.
+The current milestone is BLE dataset protocol v5: continuous segmented IMU
+recording, locked-screen resumable downloads, exact size/CRC32 verification, and
+automatic deletion of only a durably verified board copy. Firmware and Android
+v5 must be upgraded together.
 
-## Current Status
+## Current status
 
-Implemented:
-- Jetpack Compose app shell with Home, Map, Settings, and Debug screens
-- real BLE scan, GATT connection, notifications, and command writes
-- mock BLE-like device data source
-- BLE contract v1 UUID constants and text payload parsers
-- live activity, confidence, battery, session duration, steps, and calories UI
-- MET-based calorie estimate
-- phone GPS location preview on the map
-- foreground location service for recording sessions with the screen locked
-- OSMDroid route map with activity-colored segments
-- grouped stationary markers for sitting and lying
-- local settings with DataStore Preferences
-- unit tests for BLE payload parsing and calorie calculation
+Implemented in source:
 
-Not implemented yet:
-- persisted session history/export
-- manual selection from a list of multiple matching BLE devices
-- production-grade UI polish
+- BLE scan, GATT connection, MTU request, characteristic subscription, command
+  writes, control indications, and file notifications
+- v5 `hello` capability check followed by authoritative `status`
+- a dedicated `Data` screen for recording and file recovery
+- atomic `record_start` and recoverable `record_stop` transactions with request
+  IDs and timeouts
+- resumable Storage Access Framework downloads through `.part` files
+- exact byte-count and IEEE CRC-32 verification before finalizing a CSV
+- automatic guarded deletion after a second local size/CRC32 verification
+- a `connectedDevice` foreground service and partial wake lock while collection
+  or an offload backlog is active
+- an interactive mock device that records all five labels and exercises the
+  catalog/download/delete workflow, disconnects, timeouts, and CRC corruption
+  without the board
+- automatic reconnect attempts after 1, 2, 4, 8, and 15 seconds
+- a separate phone-side Home session for GPS, duration, and calorie estimation
+- map preview, foreground location service, Settings, and raw Debug events
+- JVM tests for payload/protocol parsing, controller behavior, CRC transfer
+  decisions, calories, and Home/dataset separation
+- an API 35 emulator test covering start, disconnect/reconnect, stop, automatic
+  verified download, and automatic guarded deletion against the mock device
 
-The firmware now exposes a first BLE prototype with real battery values,
-placeholder `unknown` activity/summary values, notifications, and the `status`
-command. The Android app can connect to this prototype directly.
+Still pending:
 
-## Technology Stack
+- physical BLE, QSPI, disconnect, power-loss, and throughput acceptance tests
+- a real research dataset, trained classifier, embedded inference, and a real
+  step-counting algorithm
+- durable product-session history/export beyond the dataset CSV workflow
 
-- Kotlin
-- Jetpack Compose and Material 3
-- AndroidX ViewModel and StateFlow
-- DataStore Preferences
-- Fused Location Provider
-- OSMDroid maps
-- Gradle Android Plugin
+Live activity, confidence, summary, and step values from the current firmware
+remain placeholders until the later ML milestone.
 
-## Project Layout
-
-```text
-android/
-  app/
-    src/main/
-      AndroidManifest.xml
-      java/pl/edu/activitytracker/
-        app/          dependency container
-        ble/          BLE contract and text payload parsers
-        data/         repository and device data source interfaces
-        domain/       activity, route, calorie, and reading models
-        gps/          Android location tracker
-        permissions/  runtime permission helpers
-        session/      foreground recording service
-        storage/      DataStore settings
-        ui/           Compose screens and navigation
-    src/test/         unit tests
-```
-
-## Open in Android Studio
-
-Open this directory as the Android project:
+## Project layout
 
 ```text
-activity_tracker/android
+android/app/src/main/
+  AndroidManifest.xml
+  java/pl/edu/activitytracker/
+    app/          dependency container
+    ble/          UUIDs, v5 wire codec, and telemetry parsers
+    data/         BLE/mock sources, dataset controller, and repository
+    domain/       protocol, dataset, activity, route, and calorie models
+    gps/          phone location tracker
+    permissions/  runtime permission helpers
+    session/      phone foreground location service
+    storage/      DataStore settings and SAF `.part`/CRC file storage
+    ui/           Compose screens and navigation
+android/app/src/test/
+  JVM protocol and controller tests
+android/app/src/androidTest/
+  Compose integration test against the mock device
 ```
 
-Android Studio should use its embedded JDK. If you build from a terminal and
-`java` is not in `PATH`, set `JAVA_HOME` to Android Studio's bundled runtime,
-for example on Windows:
+`DatasetController` owns BLE dataset transactions and their state. The normal
+Home session is deliberately phone-side: its Start, Stop, and Reset actions do
+not start or stop the board's dataset logger.
+
+## Open, build, and test
+
+Open `activity_tracker/android` as the Android Studio project. Android Studio
+should use its embedded JDK.
+
+From this directory on Windows:
 
 ```powershell
-$env:JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'
+.\gradlew.bat testDebugUnitTest assembleDebug --console=plain
 ```
 
-## Build and Test
-
-From `android/`:
-
-```powershell
-.\gradlew.bat :app:compileDebugKotlin
-.\gradlew.bat :app:testDebugUnitTest
-```
-
-Build a debug APK:
+If `java` is unavailable in the terminal, point `JAVA_HOME` at the installed
+Android Studio runtime. For the per-user installation used during recovery:
 
 ```powershell
-.\gradlew.bat :app:assembleDebug
+$env:JAVA_HOME="$env:LOCALAPPDATA\Programs\android-studio\jbr"
 ```
 
 The debug APK is generated under:
 
 ```text
-android/app/build/outputs/apk/debug/
+app/build/outputs/apk/debug/app-debug.apk
 ```
 
-## Install on a Phone
+The required emulator and physical acceptance gates are described in
+[`../docs/testing_without_hardware.md`](../docs/testing_without_hardware.md).
+Run the existing emulator test with `connectedDebugAndroidTest`; a `NO-SOURCE`
+result is not an accepted pass.
 
-Recommended path:
-1. Open `android/` in Android Studio.
-2. Enable Developer options and USB debugging on the phone.
-3. Connect the phone over USB and accept the RSA prompt.
-4. Select the phone in Android Studio.
-5. Press Run.
+## BLE dataset workflow
 
-The app requests:
-- location permission for map preview and session route recording
-- notification permission on Android 13+ for the foreground session service
-- nearby-device BLE permissions for scanning and connecting
+1. Open `Data` and choose a writable destination with the system folder picker.
+2. Connect and wait for protocol v5 handshake/status synchronization.
+3. Select `walking`, `running`, `cycling`, `sitting`, or `lying`.
+4. Tap `Start`; one atomic `record_start,<id>,<label>` is sent.
+5. At 1536 KiB, or earlier to preserve the storage reserve, the board finalizes
+   a segment and pauses sampling.
+6. Android automatically creates or resumes `<name>.part` and requests the
+   remaining bytes, including with the screen locked.
+7. The partial is renamed only after durable close, size, and CRC32 checks.
+8. Android rereads the final CSV, then automatically requests guarded deletion
+   of the exact board identity. Successful deletion makes firmware open the
+   next segment with the same label. Tap `Stop` to finalize the last segment and
+   end collection.
 
-## App Behavior
+If BLE is lost while recording, the board continues independently. After the
+next connection, Android repeats `hello` and `status` instead of guessing or
+blindly repeating a mutating command. A failed or interrupted download leaves
+the contiguous partial available for resume.
 
-After opening the app:
-1. Power the XIAO running the normal firmware.
-2. Tap `Scan & connect` and grant the Bluetooth permissions.
-3. The app finds the first matching `ActivityTracker` service and connects.
-4. Live activity, battery, summary, and raw debug values start updating.
-5. Open Map to allow GPS and see the current location.
-6. Tap `Start session` to record a session.
-7. Lock the phone if needed; the foreground service keeps GPS and BLE alive.
-8. Tap `Stop session` to stop recording.
+The complete wire format, response variants, MTU behavior, and error rules are
+defined in [`../docs/ble_protocol_v5.md`](../docs/ble_protocol_v5.md).
 
-Live mode:
-- starts after connecting to the BLE or mock source
-- shows current activity, confidence, battery, and debug payloads
-- does not record a route by itself
+## Local file safety
 
-Session mode:
-- starts after `Start session`
-- resets route, calories, and session duration
-- sends the `start` command to the current data source
-- starts foreground GPS recording
-- stores route points only while the session is active
-- sends `stop` when the session ends
+The selected folder is retained as a persistable SAF tree URI. Each partial has
+a sidecar containing protocol version, device identity, remote name, size, and
+CRC32. A partial belonging to different metadata is never appended to.
 
-## Map Behavior
+The final file is considered verified only when:
 
-The Map screen starts location preview when opened. It asks for location
-permission automatically because the map is not useful without GPS.
+- the remote name is a managed dataset CSV name;
+- the received byte count equals the declared unsigned 32-bit size;
+- CRC32 over the exact local bytes equals the uppercase value from firmware.
 
-The camera behavior is intentionally restrained:
-- when the map opens, it animates once to the current location or last route
-  point
-- later GPS updates move the `You` marker but do not move the camera
-- the floating location button recenters on the user
-- zoom changes are animated only when the current zoom is far from the target
+Remote deletion repeats the exact name, size, and CRC32. The firmware validates
+that identity again, so the confirmation dialog is not the only guard.
 
-Route rendering:
-- walking, running, and cycling are drawn as colored line segments
-- sitting and lying are shown as grouped stop markers
-- noisy GPS points are filtered before they are added to the recorded route
+## Mock workflow without the board
 
-## Calories
+1. Enable `Mock data source` in Settings.
+2. Tap `Connect mock` and open `Data`.
+3. Choose a folder, select a label, then Start and Stop a short recording.
+4. Confirm automatic download and local CRC verification.
+5. Disconnect/reconnect during a recording to exercise status reconciliation.
+6. Confirm deletion is unavailable before verification and still requires the
+   dialog afterwards.
 
-Calories are estimated with:
+The mock verifies Android state management, not the nRF52840 radio, BLE stack,
+QSPI flash, IMU timing, or power-loss behavior.
+
+## Home, map, and calories
+
+Home sessions track phone GPS, duration, and an approximate MET-based calorie
+estimate:
 
 ```text
 kcal = MET * 3.5 * weight_kg / 200 * minutes
 ```
 
-Default MET values:
-- lying: 1.0
-- sitting: 1.3
-- walking: 3.5
-- cycling: 6.8
-- running: 8.0
-- unknown: 0.0
+They are independent of dataset recording. The map renders walking, running,
+and cycling as colored route segments and groups stationary sitting/lying
+points. These product-facing features do not yet form a durable session-history
+or thesis dataset pipeline.
 
-These calories are an approximate estimate, not a medical measurement.
+## Permissions and security
 
-## BLE Contract v1
+The app requests nearby-device Bluetooth permissions for BLE. Location is used
+for the map and phone session, and Android 13+ requires notification permission
+for the foreground location service.
 
-Service UUID:
-
-```text
-7b7d0000-8f7a-4f6a-9f4f-1d2c3b4a5000
-```
-
-Characteristics:
-
-| Name | UUID | Properties | Payload |
-| --- | --- | --- | --- |
-| `current_activity` | `7b7d0001-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `activity,confidence_percent,duration_s` |
-| `battery` | `7b7d0002-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `voltage_mv,percent` |
-| `summary` | `7b7d0003-8f7a-4f6a-9f4f-1d2c3b4a5000` | read, notify | `session_duration_s,current_activity,steps` |
-| `command` | `7b7d0004-8f7a-4f6a-9f4f-1d2c3b4a5000` | write | `start`, `stop`, `status`, ... |
-
-Examples:
-
-```text
-walking,82,14
-3910,76
-320,walking,410
-```
-
-Allowed activity values:
-
-```text
-walking
-running
-sitting
-lying
-cycling
-unknown
-```
-
-Unknown or unrecognized activity values are mapped to `unknown`.
-
-The current firmware implementation publishes:
-
-```text
-unknown,0,0
-voltage_mv,percent
-uptime_s,unknown,0
-```
-
-It automatically notifies activity and summary approximately once per second,
-battery approximately every 30 seconds, and immediately republishes all values
-after receiving the UTF-8 command `status`.
-
-## Real BLE Device Source
-
-Real BLE is the default data source. After tapping `Scan & connect`, the app:
-1. requests the required Android Bluetooth permissions
-2. scans for the Activity Tracker service UUID and configured device name
-3. connects with Android `BluetoothGatt`
-4. enables notifications sequentially for activity, battery, and summary
-5. writes `status` so the firmware immediately republishes all values
-6. forwards received UTF-8 payloads through `BlePayloadParser` to the existing UI
-
-The current firmware recognizes only `status`. Android also writes `start` and
-`stop` when a phone session changes, but the firmware safely ignores those
-commands until firmware session handling is implemented.
-
-## Mock Device Source
-
-Enable `Mock data source` in Settings to use the app without the board. It emits:
-- current activity at about 1 Hz
-- summary at about 1 Hz
-- battery periodically
-- raw debug events
-
-Changing the source disconnects the currently active source. Both
-implementations use the same `DeviceDataSource` interface and existing UI.
-
-## Next Steps
-
-Suggested implementation order:
-1. replace placeholder activity and summary with inference results
-2. implement firmware handling for `start` and `stop`
-3. save finished sessions locally as JSON or CSV
-4. add session export for thesis analysis
+Protocol v5 is intentionally unauthenticated for this laboratory prototype.
+Any nearby client that knows the UUIDs can attempt commands; filename and file
+identity guards prevent accidents but are not access control. Pairing/bonding or
+application-layer authorization is a later milestone.

@@ -15,6 +15,7 @@ import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.ConnectionState
 import pl.edu.activitytracker.domain.DeviceCommand
+import pl.edu.activitytracker.domain.DeviceProtocolEvent
 import pl.edu.activitytracker.domain.RawDeviceEvent
 import pl.edu.activitytracker.domain.SummaryReading
 
@@ -31,10 +32,19 @@ class SelectableDeviceDataSource(
         .flatMapLatest { it.connectionState }
         .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, ConnectionState.Disconnected)
 
+    override val connectionGeneration: StateFlow<Long> = activeSource
+        .flatMapLatest { it.connectionGeneration }
+        .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, 0L)
+
+    override val deviceIdentity: StateFlow<String?> = activeSource
+        .flatMapLatest { it.deviceIdentity }
+        .stateIn(scope, kotlinx.coroutines.flow.SharingStarted.Eagerly, null)
+
     override val activity: Flow<ActivityReading> = activeSource.flatMapLatest { it.activity }
     override val battery: Flow<BatteryReading> = activeSource.flatMapLatest { it.battery }
     override val summary: Flow<SummaryReading> = activeSource.flatMapLatest { it.summary }
     override val rawEvents: Flow<RawDeviceEvent> = activeSource.flatMapLatest { it.rawEvents }
+    override val protocolEvents: Flow<DeviceProtocolEvent> = activeSource.flatMapLatest { it.protocolEvents }
 
     init {
         scope.launch {
@@ -54,5 +64,5 @@ class SelectableDeviceDataSource(
 
     override suspend fun disconnect() = activeSource.value.disconnect()
 
-    override suspend fun sendCommand(command: DeviceCommand) = activeSource.value.sendCommand(command)
+    override suspend fun sendCommand(command: DeviceCommand): Boolean = activeSource.value.sendCommand(command)
 }

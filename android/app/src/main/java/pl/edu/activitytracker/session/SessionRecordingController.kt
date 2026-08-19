@@ -3,18 +3,23 @@ package pl.edu.activitytracker.session
 import android.content.Context
 import pl.edu.activitytracker.permissions.AppPermissions
 
+interface PhoneSessionController {
+    fun startIfLocationAllowed()
+    fun stop()
+}
+
 class SessionRecordingController(
     context: Context,
-) {
+) : PhoneSessionController {
     private val appContext = context.applicationContext
 
-    fun startIfLocationAllowed() {
+    override fun startIfLocationAllowed() {
         if (AppPermissions.hasLocationPermission(appContext)) {
             SessionRecordingService.start(appContext)
         }
     }
 
-    fun stop() {
+    override fun stop() {
         SessionRecordingService.stop(appContext)
     }
 }
