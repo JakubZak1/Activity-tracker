@@ -6,6 +6,7 @@
 
 #include "activity_state.h"
 #include "crc32.h"
+#include "imu_sampling.h"
 #include "protocol_v3.h"
 
 namespace {
@@ -211,6 +212,67 @@ void testSegmentRotationBoundary() {
   TEST_ASSERT_TRUE(activity_state::shouldRotateSegment(limit + 1, limit));
   TEST_ASSERT_FALSE(activity_state::shouldRotateSegment(UINT32_MAX, 0));
 }
+
+void testImuFifoFrameAssembly() {
+  imu_sampling::FifoFrameAssembler assembler;
+  assembler.reset();
+  imu_sampling::RawFrame frame = {};
+
+  TEST_ASSERT_FALSE(assembler.push(3, 999, frame));
+  TEST_ASSERT_EQUAL_UINT32(1, assembler.discardedWords());
+  const int16_t words[] = {10, 20, 30, 40, 50, 60};
+  for (uint16_t pattern = 0; pattern < 5; ++pattern) {
+    TEST_ASSERT_FALSE(assembler.push(pattern, words[pattern], frame));
+  }
+  TEST_ASSERT_TRUE(assembler.push(5, words[5], frame));
+  TEST_ASSERT_EQUAL_INT16(10, frame.gyroX);
+  TEST_ASSERT_EQUAL_INT16(20, frame.gyroY);
+  TEST_ASSERT_EQUAL_INT16(30, frame.gyroZ);
+  TEST_ASSERT_EQUAL_INT16(40, frame.accX);
+  TEST_ASSERT_EQUAL_INT16(50, frame.accY);
+  TEST_ASSERT_EQUAL_INT16(60, frame.accZ);
+  TEST_ASSERT_EQUAL_UINT8(0, assembler.expectedPattern());
+}
+
+void testImuPairAveragingUsesBothInputFrames() {
+  imu_sampling::PairAverager averager;
+  averager.reset();
+  const imu_sampling::RawFrame first = {
+      INT16_MIN, -100, 100, 1000, -1000, INT16_MAX};
+  const imu_sampling::RawFrame second = {
+      INT16_MAX, 100, 300, 3000, 1000, INT16_MAX};
+  imu_sampling::AveragedFrame output = {};
+  TEST_ASSERT_FALSE(averager.push(first, output));
+  TEST_ASSERT_TRUE(averager.push(second, output));
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, -0.5f, output.gyroX);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, output.gyroY);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 200.0f, output.gyroZ);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 2000.0f, output.accX);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, output.accY);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 32767.0f, output.accZ);
+}
+
+void testImuTimestampSequenceIsExactly52HzOnAverage() {
+  imu_sampling::TimestampSequence timestamps;
+  timestamps.reset(1000);
+  uint32_t previous = 1000;
+  uint32_t intervals19 = 0;
+  uint32_t intervals20 = 0;
+  uint32_t current = 0;
+  for (uint32_t index = 0; index < imu_sampling::kOutputRateHz; ++index) {
+    current = timestamps.next();
+    const uint32_t interval = current - previous;
+    if (interval == 19) ++intervals19;
+    if (interval == 20) ++intervals20;
+    TEST_ASSERT_TRUE(interval == 19 || interval == 20);
+    previous = current;
+  }
+  TEST_ASSERT_EQUAL_UINT32(2000, current);
+  TEST_ASSERT_EQUAL_UINT32(40, intervals19);
+  TEST_ASSERT_EQUAL_UINT32(12, intervals20);
+  TEST_ASSERT_EQUAL_UINT32(2, imu_sampling::kInputRateHz / imu_sampling::kOutputRateHz);
+  TEST_ASSERT_EQUAL_UINT8(12, imu_sampling::kWordsPerOutputSample);
+}
 }
 
 void setUp() {}
@@ -227,5 +289,8 @@ int main() {
   RUN_TEST(testFileMetadataParser);
   RUN_TEST(testStateMachinesAndReplayPolicy);
   RUN_TEST(testSegmentRotationBoundary);
+  RUN_TEST(testImuFifoFrameAssembly);
+  RUN_TEST(testImuPairAveragingUsesBothInputFrames);
+  RUN_TEST(testImuTimestampSequenceIsExactly52HzOnAverage);
   return UNITY_END();
 }

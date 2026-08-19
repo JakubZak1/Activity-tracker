@@ -10,7 +10,7 @@ unchanged.
 
 ```text
 hello,<request_id>
-ok,<request_id>,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload
+ok,<request_id>,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard
 ```
 
 Client request IDs are `1..4294967295`; `0` is reserved for asynchronous
@@ -22,12 +22,18 @@ firmware faults. Labels are `walking`, `running`, `cycling`, `sitting`, and
 The recording machine has four states: `idle`, `recording`, `paused`, and
 `fault`.
 
-- `record_start,<id>,<label>` starts one logical recording at 50 Hz.
+- `record_start,<id>,<label>` starts one logical recording. The logger first
+  preallocates the full QSPI segment. It then reads complete 104 Hz
+  accelerometer/gyroscope output-register frames in a dedicated high-priority
+  task after both data-ready bits are asserted and averages each adjacent pair
+  into one 52 Hz CSV sample. A bounded RTOS queue decouples acquisition from
+  slower CSV/QSPI writes; queue overflow is a hard fault.
 - While `recording`, only `hello`, `status`, idempotent `record_start`, and
   `record_stop` are accepted. QSPI catalog reads, CRC scans, downloads, and
   deletion cannot compete with IMU sampling.
-- The scheduler never emits catch-up bursts after a delayed loop iteration. A
-  late sample advances the next deadline from the current time.
+- CSV timestamps follow a rational 52 Hz sequence (19 or 20 ms intervals).
+  A raw-frame interval above 22 ms or an exact-read failure enters `fault`
+  instead of silently accepting a missing or torn sample.
 - The active file is not periodically `sync()`ed during sampling because a
   physical measurement showed that one QSPI sync blocks the loop for roughly
   110-160 ms. Finalization still requires successful sync, close, full reread,

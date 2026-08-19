@@ -110,11 +110,125 @@ recording -> paused -> download/resume -> local CRC verification
           -> guarded board delete -> recording -> stop -> final offload
 ```
 
+## FIFO 104 Hz to pair-averaged 52 Hz smoke test
+
+After the polling baseline, firmware was changed to capture complete 104 Hz
+accelerometer/gyroscope frames from the LSM6DS3TR-C continuous FIFO and average
+each adjacent pair. The wide +/-16 g and +/-2000 dps ranges remain temporary
+until dynamic range scouting is complete.
+
+The first physical stationary run produced 836 serial-mirrored CSV rows:
+
+| Metric | Result |
+| --- | ---: |
+| effective output rate | 52.002 Hz |
+| timestamp intervals | 643 x 19 ms, 192 x 20 ms |
+| raw frames / output samples | 1,672 / 836 |
+| maximum FIFO backlog | 30 words (5 raw frames) |
+| discarded words / FIFO overruns | 0 / 0 |
+| acceleration magnitude mean / standard deviation | 1.0105 / 0.00136 g |
+| gyroscope magnitude mean / standard deviation | 2.8968 / 0.0707 dps |
+
+The gyroscope means (+0.54, -2.72, +0.82 dps) reproduce the stable zero-rate
+bias found in the older polling recordings. Pair averaging reduced stationary
+noise, but dynamic tests are still required before the filter and ranges are
+frozen.
+
+This result was later invalidated as an acquisition architecture decision. A
+three-minute FIFO recording (`sitting_5.csv`) contained shifted/mixed axes:
+acceleration magnitude averaged only 0.652 g with 0.359 g standard deviation,
+while stationary gyroscope magnitude averaged 80.17 dps. The FIFO has no tags,
+and the board/library path did not preserve a reliable word pattern over the
+longer test. FIFO experiment files must not enter the dataset. The replacement
+candidate uses complete data-ready output-register reads plus QSPI segment
+preallocation and remains pending physical validation.
+
+## Dedicated-task data-ready replacement smoke test
+
+The replacement path performs exact 12-byte output-register reads at 104 Hz in
+a dedicated high-priority FreeRTOS task, pair-averages to 52 Hz, and sends
+samples to the CSV/QSPI logger through a bounded queue. Each segment is
+preallocated and any raw interval above 22 ms or queue overflow is a hard
+fault.
+
+The first stationary physical run produced `sitting_0.csv`:
+
+| Metric | Result |
+| --- | ---: |
+| duration / rows | 30.634 s / 1,594 |
+| effective output rate | 52.001 Hz |
+| timestamp intervals | only 19 or 20 ms |
+| raw frames / output samples | 3,189 / 1,594 |
+| maximum raw-frame interval | 9.766 ms |
+| deadline misses | 0 |
+| acceleration magnitude mean / standard deviation | 1.0083 / 0.00063 g |
+| gyroscope magnitude mean / standard deviation | 2.9124 / 0.0675 dps |
+| gravity/gyro stationary outliers and clipping | 0 |
+| board and phone identity | 92,528 bytes / CRC32 `94EC584E` |
+
+The gyro Y mean of -2.741 dps is a stable zero-rate bias to be handled by the
+frozen calibration/preprocessing path. This short result validates acquisition
+integrity but does not replace the pending long-duration and dynamic tests.
+
+### Dynamic walking smoke test
+
+The subsequent phone-controlled `walking_1.csv` run exercised the same
+acquisition path during continuous motion. The phone copy was 495,142 bytes
+with CRC32 `24362D98` and SHA-256
+`B6AE72BC3F6EE804B70B99461EBE0DD89048930C835CB7AD099C5BE0878D5409`.
+
+| Metric | Result |
+| --- | ---: |
+| duration / rows | 150.673 s / 7,836 |
+| effective output rate | 52.000 Hz |
+| timestamp intervals | only 19 or 20 ms |
+| acceleration magnitude min / mean / max | 0.423 / 1.111 / 2.413 g |
+| gyroscope magnitude mean / maximum | 131.33 / 479.10 dps |
+| clipping / identical consecutive vectors | 0 / 0 |
+| dominant acceleration / gyro rhythm | 1.367 / 1.374 Hz |
+| median dominant rhythm across active 10 s windows | 1.400 Hz |
+
+The matching dominant motion rhythm in both sensors, realistic dynamic ranges,
+absence of clipping, and uninterrupted timestamps support correct axis and
+timing acquisition. This remains a technical smoke recording and must not be
+included in the research dataset. Attachment details and the complete activity
+protocol must be recorded for research sessions.
+
+## Six-position calibration candidate
+
+Six static enclosure-face recordings (`sitting_2.csv` through
+`sitting_7.csv`) were captured on 2026-08-19 for `xiao_unit_01`. Each file ran
+for 63.211-64.057 s at 52 Hz with no timing/schema issues or clipping. Five
+seconds were trimmed from both ends before calculating orientation means.
+
+The device-specific correction candidate is:
+
+```text
+acc_offset_g       = [-0.0042992594,  0.0007926550,  0.0070584101]
+acc_scale          = [ 0.9941095597,  1.0006084618,  0.9877269299]
+gyro_bias_dps      = [ 0.4952877547, -2.7270172713,  0.8011157593]
+
+corrected_acc[i]   = (raw_acc[i] - acc_offset_g[i]) * acc_scale[i]
+corrected_gyro[i]  = raw_gyro[i] - gyro_bias_dps[i]
+```
+
+Across the six trimmed positions, acceleration norm improved from
+`1.00622 +/- 0.00721 g` raw to `1.00025 +/- 0.00057 g` corrected, with a
+corrected range of `0.99756-1.00253 g`. Gyro bias varied by only
+`[0.0093, 0.0043, 0.0082] dps` between orientations. Raw files and exact
+identities are archived separately from activity data under
+`calibration/raw/xiao_unit_01/2026-08-19`; the machine-readable record is
+`calibration/xiao_unit_01.json`.
+
+This is an engineering calibration candidate at unrecorded ambient
+temperature, not a temperature-characterized certificate. Raw CSV remains
+unchanged. The future training and embedded-inference preprocessing paths must
+apply the same device-specific transformation.
+
 ## Remaining physical work
 
 The core locked-screen segmentation/offload workflow now passes. Separate
 later tests still need to cover power loss, disconnect during the paused/file-
-transfer phases, deliberate CRC corruption, storage failure, and confirmation
-of an empty board catalog after the stress run. Hardware FIFO capture or
-timestamp-aware resampling remains recommended before research data collection
-if tighter than the measured ~49 Hz effective rate is required.
+transfer phases, deliberate CRC corruption, storage failure, and dynamic
+range/filter validation. The current data-ready, pair-averaged 52 Hz path must pass a
+long locked-screen segmentation/offload run before research data collection.

@@ -5,11 +5,10 @@
 
 namespace app_config {
 constexpr uint32_t kSerialBaud = 115200;
-constexpr uint32_t kSampleIntervalMs = 20;
-// FatFile::sync() takes roughly 110-160 ms on the XIAO QSPI flash. Periodic
-// sync would therefore violate the 20 ms sampling deadline. Zero disables it;
-// stop/segment finalization still performs mandatory sync, close, reread, and
-// CRC verification.
+// The complete segment is preallocated before acquisition. Periodic sync is
+// disabled because FatFile::sync() can take roughly 110-160 ms on this QSPI
+// flash; stop/segment finalization still truncates, syncs, closes, rereads and
+// verifies CRC32.
 constexpr uint32_t kFlushEverySamples = 0;
 constexpr uint32_t kLedPulseEverySamples = 10;
 constexpr uint32_t kLedPulseDurationMs = 5;

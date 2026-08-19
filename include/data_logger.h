@@ -28,6 +28,9 @@ enum class DeleteResult : uint8_t {
 bool begin();
 bool startSession(const char* label);
 bool stopSession(LogFileInfo& info);
+// Preserve an active recording as an incomplete .part file, releasing the
+// unused preallocated tail. Used when acquisition fails before normal stop.
+bool abortSession();
 bool isLogging();
 bool writeSample(const IMUSample& sample, const char* label, bool mirrorToSerial, Stream& serial);
 bool flushIfNeeded();

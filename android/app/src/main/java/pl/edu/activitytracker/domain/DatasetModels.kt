@@ -12,6 +12,7 @@ val REQUIRED_DATASET_CAPABILITIES = setOf(
     "segmentation",
     "auto_offload",
     "pause_offload",
+    "imu_drdy104_mean2_52_deadline_guard",
 )
 
 data class RemoteFileIdentity(

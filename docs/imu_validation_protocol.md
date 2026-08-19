@@ -5,7 +5,7 @@ admitted to the research dataset. Calibration recordings are engineering test
 fixtures: keep them outside the dataset manifest and do not relabel them as
 physical activities.
 
-## Current stationary baseline
+## Historical polling baseline
 
 The XIAO remained stationary while `walking_31.csv` through
 `walking_37.csv` were recorded. The activity label is therefore intentionally
@@ -27,12 +27,45 @@ stream is usable, but its stable zero-rate offset should be estimated and
 handled explicitly. The isolated impulses should be checked in a controlled
 fixture before choosing filtering or rejection rules.
 
-The current library defaults configure the accelerometer for +/-16 g and the
+The firmware used for this baseline inherited library defaults that configured the accelerometer for +/-16 g and the
 gyroscope for +/-2000 dps, with both sensor output data rates at 416 Hz. The
 firmware polls the sensor at approximately 50 Hz. These settings are functional,
 but they trade measurement resolution and bandwidth for ranges that are wider
 than this project's expected signals. Do not change them midway through a
 dataset.
+
+## Current acquisition candidate
+
+The current physical candidate keeps the wide +/-16 g and +/-2000 dps ranges
+while range scouting is still in progress. It configures both sensors at 104
+Hz, reads one complete gyro+accelerometer frame after both data-ready bits are
+asserted, averages adjacent pairs, and writes 52 Hz CSV samples. The logger
+preallocates the complete QSPI segment before acquisition to avoid FAT cluster
+allocation pauses. Acquisition runs in a dedicated high-priority task and
+passes samples to the logger through a bounded queue, allowing it to continue
+during physical QSPI sector operations. A raw interval above 22 ms or queue
+overflow is a hard fault because data integrity can no longer be guaranteed.
+
+An earlier FIFO candidate initially produced a plausible short stationary
+capture, but a longer physical recording later showed shifted/mixed axes and
+thousands of gravity and gyro outliers. That CSV and all FIFO experiment files
+are invalid diagnostic artifacts, not dataset material. The current candidate
+must pass a new stationary and dynamic physical validation before its
+configuration is frozen.
+
+The first stationary hardware run of the replacement path completed 30.634 s:
+1594 CSV rows at 52.001 Hz, only 19/20 ms timestamps, 3189 raw frames, a 9.766
+ms maximum raw-frame interval, and zero deadline misses. The phone copy matched
+the board's 92,528-byte file and CRC32 `94EC584E`. Acceleration magnitude was
+1.0083 +/- 0.00063 g with no gravity outliers or clipping. The stable gyro Y
+bias was -2.741 dps and remains a calibration input, not a data-integrity
+failure. This is a smoke test; long-duration and dynamic validation are still
+required.
+
+This pair-mean filter is not yet the frozen research configuration. Dynamic
+range and motion tests must still confirm the full-scale settings and whether a
+stronger low-pass filter is justified. Any final change requires repeating the
+six-position calibration.
 
 ## Controlled six-position accelerometer test
 
@@ -90,7 +123,8 @@ corrected = (raw - offset) * scale
 Evaluate these engineering acceptance checks before collecting research data:
 
 - every file has the expected schema, finite values, and increasing timestamps;
-- effective sampling rate is close to 50 Hz and there are no catch-up bursts;
+- effective sampling rate is close to the configured 52 Hz and there are no
+  missing, duplicated, or desynchronized FIFO frames;
 - the stationary acceleration magnitude is close to 1 g;
 - no axis clips;
 - acceleration offset and scale estimates are repeatable;

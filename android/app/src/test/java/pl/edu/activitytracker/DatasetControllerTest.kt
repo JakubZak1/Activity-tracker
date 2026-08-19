@@ -84,6 +84,33 @@ class DatasetControllerTest {
     }
 
     @Test
+    fun missingFifoAcquisitionCapabilityRejectsOlderV5Firmware() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        device.handler = { command ->
+            when (command) {
+                is DeviceCommand.Hello -> respond(
+                    DeviceControlResponse.Hello(
+                        command.requestId,
+                        DATASET_PROTOCOL_VERSION,
+                        REQUIRED_DATASET_CAPABILITIES - "imu_drdy104_mean2_52_deadline_guard",
+                    ),
+                )
+                else -> error("Handshake must stop when guarded IMU acquisition is missing: $command")
+            }
+        }
+        val controller = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        runCurrent()
+
+        device.connect(null)
+        runCurrent()
+
+        assertTrue(controller.state.value.connection is DatasetConnectionState.Incompatible)
+        assertEquals(1, device.commands.size)
+        assertTrue(device.commands.single() is DeviceCommand.Hello)
+    }
+
+    @Test
     fun rapidStartTapsProduceOneAtomicRecordStart() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val device = FakeDeviceDataSource()

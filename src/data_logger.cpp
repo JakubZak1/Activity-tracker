@@ -198,7 +198,9 @@ bool chooseSessionName(const char* label) {
 
 void closeIncomplete(const char* errorCode) {
   if (logFile.isOpen()) {
-    logFile.sync();
+    // A session file is preallocated. Release the unused tail even on failure
+    // so a small incomplete capture cannot consume an entire segment.
+    logFile.truncate();
     logFile.close();
   }
   setError(errorCode);
@@ -386,6 +388,13 @@ bool startSession(const char* label) {
     setError("log_open_failed");
     return false;
   }
+  // Allocate all clusters before the IMU starts. Without this, FAT cluster
+  // allocation caused observed ~43 ms stalls and could overwrite 104 Hz raw
+  // output-register samples.
+  if (!logFile.preAllocate(app_config::kSegmentMaxBytes)) {
+    closeIncomplete("log_preallocate_failed");
+    return false;
+  }
 
   strncpy(currentLabelBuffer, label, sizeof(currentLabelBuffer) - 1);
   currentLabelBuffer[sizeof(currentLabelBuffer) - 1] = '\0';
@@ -417,12 +426,15 @@ bool stopSession(LogFileInfo& info) {
     setError("not_recording");
     return false;
   }
-  const bool syncOk = logFile.sync();
+  // preAllocate() makes fileSize() equal to the reservation. truncate() uses
+  // the current write position, returning the file to the exact CSV length.
+  const bool truncateOk = logFile.truncate();
+  const bool syncOk = truncateOk && logFile.sync();
   const uint32_t finalSize = logFile.fileSize();
   const uint32_t expectedCrc = crc32::finalize(currentCrcState);
   const bool closeOk = logFile.close();
-  if (!syncOk || !closeOk) {
-    setError(!syncOk ? "log_sync_failed" : "log_close_failed");
+  if (!truncateOk || !syncOk || !closeOk) {
+    setError(!truncateOk ? "log_truncate_failed" : (!syncOk ? "log_sync_failed" : "log_close_failed"));
     return false;
   }
   if (finalSize != bytesWritten) {
@@ -455,6 +467,19 @@ bool stopSession(LogFileInfo& info) {
   lastCompletedSession = info;
   hasLastCompletedSession = true;
   currentPartPathBuffer[0] = '\0';
+  return true;
+}
+
+bool abortSession() {
+  if (!logFile.isOpen()) {
+    return true;
+  }
+  const bool truncateOk = logFile.truncate();
+  const bool closeOk = logFile.close();
+  if (!truncateOk || !closeOk) {
+    setError(!truncateOk ? "log_abort_truncate_failed" : "log_abort_close_failed");
+    return false;
+  }
   return true;
 }
 

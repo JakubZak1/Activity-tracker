@@ -9,8 +9,11 @@ Current project status:
 - BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
 - The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
 - A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
-- A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. In-segment sampling measured 48.929 Hz without catch-up bursts; remaining hardware work focuses on failure injection and optional IMU FIFO hardening.
+- A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. A later long FIFO test exposed word-pattern desynchronization, so those FIFO recordings are diagnostic only. The replacement acquisition runs complete 104 Hz output-register reads in a dedicated high-priority task, averages adjacent pairs to 52 Hz, preallocates each QSPI segment, and stops rather than accepting a raw-frame gap above 22 ms. Its first 30.634 s stationary hardware run produced 1594 valid rows at 52.001 Hz with a maximum raw-frame interval of 9.766 ms; longer and dynamic validation remains pending.
 - There is currently no research dataset. Existing CSV files, if present locally, are smoke-test recordings only.
+- A six-position engineering calibration candidate for `xiao_unit_01` is
+  archived under `calibration/`; these raw files are explicitly excluded from
+  activity training data.
 - There is no trained ML model, no activity-classification inference on the device, and no real step-counting algorithm. Live activity and summary telemetry remain placeholders.
 
 ## Hardware
@@ -27,7 +30,12 @@ Main onboard resources used right now:
 
 Normal firmware environment:
 
-- samples IMU data at 50 Hz
+- reads complete 104 Hz accelerometer/gyroscope frames after both data-ready
+  bits are asserted, averages adjacent pairs, and logs a deterministic 52 Hz stream
+- preallocates each 1536 KiB segment before acquisition so FAT cluster
+  allocation cannot stall the sampling loop
+- runs IMU acquisition in a bounded, higher-priority task so physical QSPI
+  erase stalls cannot block sensor reads; queue overflow is a hard fault
 - avoids blocking periodic filesystem sync during sampling; durable sync,
   close, reread, and CRC verification occur when a segment is finalized
 - boots idle and never creates a dataset session without an explicit start command

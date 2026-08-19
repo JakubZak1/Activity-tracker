@@ -23,7 +23,6 @@ enum class ResponseTransport : uint8_t {
 
 activity_state::RecordingMachine recordingMachine;
 uint32_t recordingStartedAtMs = 0;
-uint32_t nextSampleMs = 0;
 uint32_t sampleId = 0;
 bool serialStreaming = false;
 bool serialFaultReported = false;
@@ -63,19 +62,42 @@ void handleFatalError(const char* message) {
   blinkFatalPattern(120, 880);
 }
 
-void resetSamplingRuntime() {
-  sampleId = 0;
-  nextSampleMs = millis();
-  recordingStartedAtMs = nextSampleMs;
-  serialFaultReported = false;
-  bleFaultReported = false;
-  faultBleWasConnected = false;
+void printCaptureStats(Stream& serial) {
+  const imu_reader::CaptureStats capture = imu_reader::captureStats();
+  serial.print("info,imu_capture,raw_frames=");
+  serial.print(capture.rawFrames);
+  serial.print(",output_samples=");
+  serial.print(capture.outputSamples);
+  serial.print(",status_read_retries=");
+  serial.print(capture.statusReadRetries);
+  serial.print(",max_raw_interval_us=");
+  serial.print(capture.maxRawIntervalUs);
+  serial.print(",deadline_misses=");
+  serial.println(capture.deadlineMisses);
+}
+
+bool startSamplingRuntime(bool newRecording) {
+  const uint32_t now = millis();
+  if (newRecording) {
+    sampleId = 0;
+    recordingStartedAtMs = now;
+    serialFaultReported = false;
+    bleFaultReported = false;
+    faultBleWasConnected = false;
+  }
   setLed(false);
+  return imu_reader::startCapture(now);
 }
 
 void copyFault(const char* error) {
+  // Copy the primary cause before stopping subsystems because their cleanup
+  // paths may update their own last-error buffers.
   strncpy(recordingFault, error ? error : "recording_failed", sizeof(recordingFault) - 1);
   recordingFault[sizeof(recordingFault) - 1] = '\0';
+  imu_reader::stopCapture();
+  if (data_logger::isLogging()) {
+    data_logger::abortSession();
+  }
   serialFaultReported = false;
   bleFaultReported = false;
   faultBleWasConnected = ble_service::isConnected();
@@ -120,11 +142,11 @@ bool refreshCachedFreeBytes() {
 }
 
 void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) {
-  char response[128] = {0};
+  char response[192] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,%lu,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload",
+      "ok,%lu,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard",
       static_cast<unsigned long>(requestId));
   sendResponse(transport, serial, response);
 }
@@ -265,7 +287,11 @@ void handleRecordStart(
     return;
   }
   recordingFreeBytesAtStart = cachedFreeBytes;
-  resetSamplingRuntime();
+  if (!startSamplingRuntime(true)) {
+    copyFault(imu_reader::lastError());
+    sendError(transport, serial, command.requestId, recordingFault);
+    return;
+  }
   char response[128] = {0};
   snprintf(
       response,
@@ -340,6 +366,10 @@ void handleRecordStop(
     return;
   }
 
+  imu_reader::stopCapture();
+  if (Serial) {
+    printCaptureStats(Serial);
+  }
   data_logger::LogFileInfo info = {};
   if (!data_logger::stopSession(info)) {
     copyFault(data_logger::lastError());
@@ -466,6 +496,8 @@ void handleDelete(
       resumeError = data_logger::lastError();
     } else if (!recordingMachine.resumeAfterOffload()) {
       resumeError = "recording_resume_failed";
+    } else if (!startSamplingRuntime(false)) {
+      resumeError = imu_reader::lastError();
     } else {
       recordingFreeBytesAtStart = cachedFreeBytes;
     }
@@ -477,7 +509,6 @@ void handleDelete(
     hasPendingOffload = false;
     memset(&pendingOffload, 0, sizeof(pendingOffload));
     pendingOffloadLabel[0] = '\0';
-    nextSampleMs = millis();
   }
   char response[128] = {0};
   snprintf(
@@ -568,7 +599,7 @@ void serviceBleCommands() {
 }
 
 void printHelp(Stream& serial) {
-  serial.println("BLE protocol v3 commands are also accepted over serial:");
+  serial.println("BLE protocol v5 commands are also accepted over serial:");
   serial.println("hello,<id> | status,<id> | record_start,<id>,<label> | record_stop,<id>");
   serial.println("list,<id> | delete,<id>,<name>,<size>,<CRC32> | cancel,<id>");
   serial.println("diagnostics: help | stream on | stream off");
@@ -600,6 +631,7 @@ void reportRecordingFaultIfNeeded() {
     return;
   }
   if (!serialFaultReported && Serial) {
+    printCaptureStats(Serial);
     Serial.print("error,0,");
     Serial.println(recordingFault);
     serialFaultReported = true;
@@ -645,9 +677,13 @@ void setup() {
   }
 
   const bool bleReady = ble_service::begin();
-  resetSamplingRuntime();
+  sampleId = 0;
+  recordingStartedAtMs = millis();
   refreshCachedFreeBytes();
   if (Serial) {
+    Serial.print("info,imu_config,address=0x");
+    Serial.print(imu_reader::activeAddress(), HEX);
+    Serial.println(",input_hz=104,output_hz=52,source=data_ready,filter=pair_mean,deadline_guard_us=22000,storage=preallocated,accel_range_g=16,gyro_range_dps=2000");
     if (bleReady) {
       Serial.print("info,ble_advertising,");
       Serial.println(app_config::kBleDeviceName);
@@ -672,12 +708,17 @@ void loop() {
     return;
   }
 
-  const uint32_t now = millis();
-  if (static_cast<int32_t>(now - nextSampleMs) < 0) {
+  IMUSample sample = {};
+  const imu_reader::ReadResult readResult = imu_reader::readNext(sampleId, sample);
+  if (readResult == imu_reader::ReadResult::NoData) {
     return;
   }
-  nextSampleMs = now + app_config::kSampleIntervalMs;
-  const IMUSample sample = imu_reader::readSample(sampleId++, now);
+  if (readResult != imu_reader::ReadResult::Sample) {
+    copyFault(imu_reader::lastError());
+    reportRecordingFaultIfNeeded();
+    return;
+  }
+  ++sampleId;
   if (!data_logger::writeSample(sample, data_logger::currentLabel(), serialStreaming, Serial)) {
     copyFault(data_logger::lastError());
     reportRecordingFaultIfNeeded();
@@ -701,6 +742,10 @@ void loop() {
           : 0;
   if (activity_state::shouldRotateSegment(currentBytes, app_config::kSegmentMaxBytes) ||
       activity_state::shouldRotateSegment(currentBytes, safeBytesForSegment)) {
+    imu_reader::stopCapture();
+    if (Serial) {
+      printCaptureStats(Serial);
+    }
     strncpy(
         pendingOffloadLabel,
         data_logger::currentLabel(),

@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "device": {
+    "alias": "xiao_unit_01",
+    "board": "Seeed Studio XIAO nRF52840 Sense",
+    "usb_serial": "7F1F9F0D872F1832"
+  },
+  "captured_on": "2026-08-19",
+  "acquisition": {
+    "protocol_version": 5,
+    "capability": "imu_drdy104_mean2_52_deadline_guard",
+    "input_rate_hz": 104,
+    "output_rate_hz": 52,
+    "accelerometer_range_g": 16,
+    "gyroscope_range_dps": 2000
+  },
+  "method": {
+    "type": "six_position_static",
+    "trim_seconds_at_start": 5,
+    "trim_seconds_at_end": 5,
+    "raw_directory": "calibration/raw/xiao_unit_01/2026-08-19",
+    "correction_order": "corrected_acc=(raw_acc-offset_g)*scale_multiplier; corrected_gyro=raw_gyro-bias_dps"
+  },
+  "orientations": [
+    {
+      "file": "sitting_2.csv",
+      "position": "face_1",
+      "bytes": 199816,
+      "rows": 3329,
+      "duration_s": 64.0,
+      "crc32": "9EEB9B3D",
+      "sha256": "5DCDA094903E0663DA3B99253C80E2DA89449F756392BA43716B0EBC973569CB"
+    },
+    {
+      "file": "sitting_3.csv",
+      "position": "face_1_opposite",
+      "bytes": 197536,
+      "rows": 3291,
+      "duration_s": 63.269,
+      "crc32": "4D7D2395",
+      "sha256": "E821953955C82175B3C0E10EF933F61AD7321BAAB582BD58D55E7001DF0E0C2A"
+    },
+    {
+      "file": "sitting_4.csv",
+      "position": "usb_up",
+      "bytes": 203932,
+      "rows": 3288,
+      "duration_s": 63.211,
+      "crc32": "5FB7EC43",
+      "sha256": "D72253DA7EA655696D069D6296B7B79264EE151BC087005C304A905EEE3B2C15"
+    },
+    {
+      "file": "sitting_5.csv",
+      "position": "usb_down",
+      "bytes": 194068,
+      "rows": 3288,
+      "duration_s": 63.211,
+      "crc32": "1400AE5F",
+      "sha256": "4063EEE065528179856306358045B6C4A210F144BB66A11546B844C2D8BCCD57"
+    },
+    {
+      "file": "sitting_6.csv",
+      "position": "side_1",
+      "bytes": 199576,
+      "rows": 3325,
+      "duration_s": 63.923,
+      "crc32": "FD5F1B2F",
+      "sha256": "DCF9F9E2F22A7B359DFDCFBA7386812F2329698F632DF3D0ECBDE1C4BD49B542"
+    },
+    {
+      "file": "sitting_7.csv",
+      "position": "side_1_opposite",
+      "bytes": 199996,
+      "rows": 3332,
+      "duration_s": 64.057,
+      "crc32": "9BA055A8",
+      "sha256": "50C333E7794120B0F5A67191BE5787D14C6900FBDF38E7BE7E510DDC887EC021"
+    }
+  ],
+  "accelerometer": {
+    "axis_order": ["x", "y", "z"],
+    "offset_g": [-0.0042992594, 0.0007926550, 0.0070584101],
+    "scale_multiplier": [0.9941095597, 1.0006084618, 0.9877269299],
+    "raw_norm_mean_g": 1.0062155766,
+    "raw_norm_stddev_g": 0.0072082220,
+    "corrected_norm_mean_g": 1.0002470035,
+    "corrected_norm_stddev_g": 0.0005676157,
+    "corrected_norm_min_g": 0.9975615292,
+    "corrected_norm_max_g": 1.0025312563
+  },
+  "gyroscope": {
+    "axis_order": ["x", "y", "z"],
+    "bias_dps": [0.4952877547, -2.7270172713, 0.8011157593],
+    "bias_between_orientation_stddev_dps": [0.0092975998, 0.0042932031, 0.0081931665]
+  },
+  "status": "engineering_calibration_candidate",
+  "notes": [
+    "Raw calibration CSV files are not activity-class dataset sessions.",
+    "The logger continues to store raw physical units; apply this exact correction in both model training and embedded inference preprocessing.",
+    "Repeat calibration for every physical XIAO unit and after changing the IMU range, ODR, averaging, enclosure, or mounting of the board inside the enclosure.",
+    "Temperature was not controlled or recorded, so temperature-dependent bias remains uncharacterized."
+  ]
+}

@@ -94,16 +94,23 @@ fun DataCollectionScreen(
         is CollectionState.PausedForOffload -> collection.file.name to collection.elapsedMillis
         else -> null
     }
-    var displayedElapsedMillis by remember(activeElapsed?.first, activeElapsed?.second) {
+    // Keep one monotonic UI clock for the lifetime of a recording file. The
+    // controller refreshes authoritative device status every two seconds;
+    // keying this state/effect by elapsedMillis restarted the clock on every
+    // refresh and could make the displayed whole seconds appear to jump.
+    // A reconnect passes through a non-recording state, so the same file is
+    // still re-anchored from the device-reported elapsed time afterwards.
+    var displayedElapsedMillis by remember(activeElapsed?.first) {
         mutableLongStateOf(activeElapsed?.second ?: 0L)
     }
-    LaunchedEffect(recording?.fileName, recording?.elapsedMillis) {
+    LaunchedEffect(recording?.fileName) {
         val activeRecording = recording ?: return@LaunchedEffect
+        val elapsedAtAnchor = activeRecording.elapsedMillis
         val startedAtRealtime = SystemClock.elapsedRealtime()
         while (true) {
-            displayedElapsedMillis = activeRecording.elapsedMillis +
+            displayedElapsedMillis = elapsedAtAnchor +
                 (SystemClock.elapsedRealtime() - startedAtRealtime).coerceAtLeast(0L)
-            delay(1_000L)
+            delay(250L)
         }
     }
     var selectedActivityName by rememberSaveable { mutableStateOf(ActivityType.Walking.wireName) }
