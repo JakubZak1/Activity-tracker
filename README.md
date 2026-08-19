@@ -9,7 +9,7 @@ Current project status:
 - BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
 - The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
 - A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
-- A nearly 20-minute locked-screen v4 hardware run proved foreground BLE offload and guarded deletion, but exposed bursty sampling while QSPI was read concurrently. v5 removes that concurrency and still requires its final physical timing run.
+- A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. In-segment sampling measured 48.929 Hz without catch-up bursts; remaining hardware work focuses on failure injection and optional IMU FIFO hardening.
 - There is currently no research dataset. Existing CSV files, if present locally, are smoke-test recordings only.
 - There is no trained ML model, no activity-classification inference on the device, and no real step-counting algorithm. Live activity and summary telemetry remain placeholders.
 
@@ -111,7 +111,7 @@ Incomplete files caused by power loss or write/finalization failure are listed a
 
 BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing and locked-screen recovery pass; the physical 1536 KiB pause/offload/resume boundary remains pending.
+The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing, stale-partial recovery, and six physical 1536 KiB locked-screen pause/offload/resume cycles pass.
 
 ## Android MVP App
 
@@ -136,7 +136,7 @@ Current app features:
 
 Current limitations:
 
-- v5 pause/offload/resume and corrected 50 Hz timing have not yet passed the physical acceptance run
+- power-loss, transfer-phase disconnect, deliberate CRC corruption, and storage-failure injection remain pending physical tests
 - BLE has no pairing, authentication, application-layer encryption, or authorization
 - firmware publishes placeholder activity, confidence, steps, and summary values
 - there is no ML model or on-device inference

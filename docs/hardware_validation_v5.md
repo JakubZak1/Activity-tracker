@@ -73,17 +73,48 @@ than a directly instrumented measurement. Hardware FIFO capture or timestamp-
 aware resampling remains a possible data-quality improvement before collecting
 the research dataset.
 
-## Remaining v5 physical gate
+## One-hour segmented locked-screen run
 
-`lying_30.csv` was smaller than the 1536 KiB segment threshold. A final locked-
-screen run must cross at least one threshold and prove the complete v5 state
-sequence:
+A continuous `walking` session produced `walking_31.csv` through
+`walking_37.csv`. The first six segments crossed the 1536 KiB threshold; the
+seventh was finalized by the user's Stop action. All seven appeared as final
+phone CSV files with no residual `.part` artifact.
+
+| File | Bytes | Rows | In-segment duration | Effective rate | CRC32 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| `walking_31.csv` | 1,572,889 | 26,936 | 550.405 s | 48.937 Hz | `9E47F696` |
+| `walking_32.csv` | 1,572,917 | 26,651 | 544.665 s | 48.929 Hz | `35CD5EEA` |
+| `walking_33.csv` | 1,572,901 | 26,656 | 544.872 s | 48.920 Hz | `91BA36C5` |
+| `walking_34.csv` | 1,572,895 | 26,658 | 544.877 s | 48.923 Hz | `A079C4E3` |
+| `walking_35.csv` | 1,572,900 | 26,661 | 544.893 s | 48.927 Hz | `D1993EFF` |
+| `walking_36.csv` | 1,572,897 | 26,659 | 544.744 s | 48.937 Hz | `3899722A` |
+| `walking_37.csv` | 28,101 | 475 | 9.652 s | 49.109 Hz | `77264237` |
+
+The first-to-last sample wall time was 3,758.627 s (`1:02:38.627`), matching
+the application's approximately 1 h 2 min display. Actual in-segment sampling
+time was 3,284.108 s. Six deliberate offload gaps totaled 474.519 s; individual
+gaps were 71.898-86.563 s.
+
+Across all segments there were 160,696 rows. Of 160,689 internal intervals,
+157,821 were 18-22 ms, none was below 18 ms, six exceeded 100 ms, and the
+maximum was 172 ms. The aggregate rate inside segments was 48.929 Hz.
+
+The user noticed that the LED stopped blinking near the end. This corresponded
+to the final controlled offload pause, not a logger failure: after the pause,
+firmware resumed and recorded 9.652 s into `walking_37.csv` before Stop.
+
+This run physically proved the complete sequence six times:
 
 ```text
 recording -> paused -> download/resume -> local CRC verification
           -> guarded board delete -> recording -> stop -> final offload
 ```
 
-After that run, verify that the board catalog is empty, every phone segment has
-the expected CRC, and the first segment contains no concurrent-transfer timing
-distortion. Power-loss and IMU FIFO work remain separate later tests.
+## Remaining physical work
+
+The core locked-screen segmentation/offload workflow now passes. Separate
+later tests still need to cover power loss, disconnect during the paused/file-
+transfer phases, deliberate CRC corruption, storage failure, and confirmation
+of an empty board catalog after the stress run. Hardware FIFO capture or
+timestamp-aware resampling remains recommended before research data collection
+if tighter than the measured ~49 Hz effective rate is required.
