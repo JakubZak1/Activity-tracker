@@ -531,7 +531,7 @@ void serviceTimeouts() {
 }
 
 namespace ble_service {
-bool begin() {
+bool begin(const char* deviceName) {
   if (!commandAssemblerMutex) {
     commandAssemblerMutex = xSemaphoreCreateMutex();
     if (!commandAssemblerMutex) {
@@ -546,7 +546,7 @@ bool begin() {
   }
   Bluefruit.autoConnLed(false);
   Bluefruit.setTxPower(4);
-  Bluefruit.setName(app_config::kBleDeviceName);
+  Bluefruit.setName(deviceName && deviceName[0] ? deviceName : app_config::kBleDeviceName);
   Bluefruit.setEventCallback(bleEvent);
   Bluefruit.Periph.setConnectCallback(connected);
   Bluefruit.Periph.setDisconnectCallback(disconnected);

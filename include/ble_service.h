@@ -7,7 +7,7 @@
 #include "activity_state.h"
 
 namespace ble_service {
-bool begin();
+bool begin(const char* deviceName);
 void service();
 bool isConnected();
 bool takeCommand(char* output, size_t outputSize);

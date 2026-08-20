@@ -41,7 +41,7 @@ interface DatasetFileStore {
 
     fun complete(sink: DownloadSink): CompleteResult
 
-    fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean
+    fun isVerified(treeUri: String, deviceIdentity: String, file: RemoteFileIdentity): Boolean
 
     fun isFolderAvailable(treeUri: String): Boolean = true
 }
@@ -124,8 +124,10 @@ class LogFileStore(context: Context) : DatasetFileStore {
         sessionMetadata: DatasetSessionMetadata?,
     ): DatasetFileStore.PrepareResult {
         if (!isSafeFile(file)) return DatasetFileStore.PrepareResult.Failure("Invalid remote file metadata")
-        val tree = documentTree(treeUri)
+        val root = documentTree(treeUri)
             ?: return DatasetFileStore.PrepareResult.Failure("Selected folder is unavailable or permission was revoked")
+        val tree = deviceDirectory(root, deviceIdentity, create = true)
+            ?: return DatasetFileStore.PrepareResult.Failure("Could not create the device-specific storage folder")
 
         val partialName = "${file.name}.part"
         val metadataName = "${file.name}.part.meta"
@@ -262,9 +264,12 @@ class LogFileStore(context: Context) : DatasetFileStore {
         }
     }
 
-    override fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean {
+    override fun isVerified(treeUri: String, deviceIdentity: String, file: RemoteFileIdentity): Boolean {
         if (!isSafeFile(file)) return false
-        return documentTree(treeUri)?.findFile(file.name)?.let { verifyDocument(it, file) } ?: false
+        val root = documentTree(treeUri) ?: return false
+        return deviceDirectory(root, deviceIdentity, create = false)
+            ?.findFile(file.name)
+            ?.let { verifyDocument(it, file) } ?: false
     }
 
     override fun isFolderAvailable(treeUri: String): Boolean = documentTree(treeUri) != null
@@ -348,6 +353,7 @@ class LogFileStore(context: Context) : DatasetFileStore {
         appendLine("  \"sensor_placement\": \"${session.placement.wireName}\",")
         appendLine("  \"body_side\": \"${session.bodySide.wireName}\",")
         appendLine("  \"session_id\": \"${jsonEscape(session.sessionId)}\",")
+        appendLine("  \"paired_session_id\": \"${jsonEscape(session.pairedSessionId)}\",")
         appendLine("  \"started_at_epoch_ms\": ${session.startedAtEpochMillis}")
         appendLine("}")
     }
@@ -390,6 +396,17 @@ class LogFileStore(context: Context) : DatasetFileStore {
         DocumentFile.fromTreeUri(appContext, Uri.parse(uri))
             ?.takeIf { it.exists() && it.isDirectory && it.canRead() && it.canWrite() }
     }.getOrNull()
+
+    private fun deviceDirectory(
+        root: DocumentFile,
+        deviceIdentity: String,
+        create: Boolean,
+    ): DocumentFile? {
+        if (!deviceIdentity.matches(Regex("[0-9A-F]{16}"))) return null
+        val name = "xiao_${deviceIdentity.takeLast(8).lowercase(Locale.US)}"
+        return root.findFile(name)?.takeIf { it.isDirectory }
+            ?: if (create) root.createDirectory(name) else null
+    }
 
     private fun isSafeFile(file: RemoteFileIdentity): Boolean =
         file.name.matches(Regex("[a-z0-9_]+_[0-9]+\\.csv")) &&

@@ -149,6 +149,10 @@ class DatasetSimulatorUiTest {
             }
         }
 
-        override fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean = file in verified
+        override fun isVerified(
+            treeUri: String,
+            deviceIdentity: String,
+            file: RemoteFileIdentity,
+        ): Boolean = file in verified
     }
 }

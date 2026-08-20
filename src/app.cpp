@@ -11,6 +11,7 @@
 #include "ble_service.h"
 #include "crc32.h"
 #include "data_logger.h"
+#include "device_identity.h"
 #include "imu_reader.h"
 #include "protocol_v3.h"
 #include "serial_console.h"
@@ -35,16 +36,60 @@ char pendingOffloadLabel[app_config::kActivityLabelBufferSize] = {0};
 uint32_t cachedFreeBytes = 0;
 uint32_t recordingFreeBytesAtStart = 0;
 
-void setLed(bool on) {
-  digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
+enum class DeviceLedColor : uint8_t {
+  Blue,
+  Green,
+};
+
+DeviceLedColor deviceLedColor = DeviceLedColor::Blue;
+uint32_t identifyUntilMs = 0;
+uint32_t identifyNextToggleMs = 0;
+bool identifyLedOn = false;
+
+void setRgbOff() {
+  digitalWrite(LED_RED, HIGH);
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_BLUE, HIGH);
 }
 
-void blinkFatalPattern(uint32_t onMs, uint32_t offMs) {
+void setRgb(DeviceLedColor color, bool on) {
+  setRgbOff();
+  if (!on) return;
+  digitalWrite(color == DeviceLedColor::Blue ? LED_BLUE : LED_GREEN, LOW);
+}
+
+void setLed(bool on) {
+  if (identifyUntilMs != 0) return;
+  setRgb(deviceLedColor, on);
+}
+
+void blinkFatalPattern(const char* message, uint32_t onMs, uint32_t offMs) {
   while (true) {
-    setLed(true);
+    if (Serial) {
+      Serial.println(message);
+    }
+    setRgbOff();
+    digitalWrite(LED_RED, LOW);
     delay(onMs);
-    setLed(false);
+    setRgbOff();
     delay(offMs);
+  }
+}
+
+void serviceIdentifyLed() {
+  if (identifyUntilMs == 0) return;
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - identifyUntilMs) >= 0) {
+    identifyUntilMs = 0;
+    identifyNextToggleMs = 0;
+    identifyLedOn = false;
+    setRgbOff();
+    return;
+  }
+  if (identifyNextToggleMs == 0 || static_cast<int32_t>(now - identifyNextToggleMs) >= 0) {
+    identifyLedOn = !identifyLedOn;
+    setRgb(deviceLedColor, identifyLedOn);
+    identifyNextToggleMs = now + 180;
   }
 }
 
@@ -56,10 +101,7 @@ void waitForSerial(uint32_t timeoutMs) {
 }
 
 void handleFatalError(const char* message) {
-  if (Serial) {
-    Serial.println(message);
-  }
-  blinkFatalPattern(120, 880);
+  blinkFatalPattern(message, 120, 880);
 }
 
 void printCaptureStats(Stream& serial) {
@@ -102,7 +144,8 @@ void copyFault(const char* error) {
   bleFaultReported = false;
   faultBleWasConnected = ble_service::isConnected();
   recordingMachine.fail();
-  setLed(false);
+  identifyUntilMs = 0;
+  setRgbOff();
 }
 
 bool sendResponse(ResponseTransport transport, Stream* serial, const char* response) {
@@ -142,12 +185,37 @@ bool refreshCachedFreeBytes() {
 }
 
 void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) {
-  char response[192] = {0};
+  char response[app_config::kBleControlResponseBufferSize] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,%lu,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard",
-      static_cast<unsigned long>(requestId));
+      "ok,%lu,hello,6,%s,%s,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard;stable_device_id;rgb_identify;unique_filenames",
+      static_cast<unsigned long>(requestId),
+      device_identity::fullId(),
+      device_identity::shortId());
+  sendResponse(transport, serial, response);
+}
+
+void handleIdentify(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  deviceLedColor = strcmp(command.color, "green") == 0
+                       ? DeviceLedColor::Green
+                       : DeviceLedColor::Blue;
+  const uint32_t now = millis();
+  identifyUntilMs = now + command.durationMs;
+  identifyNextToggleMs = 0;
+  identifyLedOn = false;
+  serviceIdentifyLed();
+  char response[96] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,%lu,identified,%s,%lu",
+      static_cast<unsigned long>(command.requestId),
+      command.color,
+      static_cast<unsigned long>(command.durationMs));
   sendResponse(transport, serial, response);
 }
 
@@ -276,7 +344,7 @@ void handleRecordStart(
     sendError(transport, serial, command.requestId, "storage_critical");
     return;
   }
-  if (!data_logger::startSession(command.label)) {
+  if (!data_logger::startSession(command.label, device_identity::filePrefix())) {
     copyFault(data_logger::lastError());
     sendError(transport, serial, command.requestId, recordingFault);
     return;
@@ -492,7 +560,7 @@ void handleDelete(
       resumeError = data_logger::lastError();
     } else if (cachedFreeBytes <= app_config::kCriticalFreeBytes) {
       resumeError = "storage_critical";
-    } else if (!data_logger::startSession(pendingOffloadLabel)) {
+    } else if (!data_logger::startSession(pendingOffloadLabel, device_identity::filePrefix())) {
       resumeError = data_logger::lastError();
     } else if (!recordingMachine.resumeAfterOffload()) {
       resumeError = "recording_resume_failed";
@@ -528,6 +596,7 @@ void dispatchCommand(
   if (recordingMachine.state() == activity_state::RecordingState::Recording &&
       command.type != protocol_v3::CommandType::Hello &&
       command.type != protocol_v3::CommandType::Status &&
+      command.type != protocol_v3::CommandType::Identify &&
       command.type != protocol_v3::CommandType::RecordStart &&
       command.type != protocol_v3::CommandType::RecordStop) {
     sendError(transport, serial, command.requestId, "busy_recording");
@@ -575,6 +644,9 @@ void dispatchCommand(
     case protocol_v3::CommandType::Delete:
       handleDelete(transport, serial, command);
       break;
+    case protocol_v3::CommandType::Identify:
+      handleIdentify(transport, serial, command);
+      break;
     case protocol_v3::CommandType::Invalid:
       sendError(transport, serial, command.requestId, "invalid_command");
       break;
@@ -599,9 +671,10 @@ void serviceBleCommands() {
 }
 
 void printHelp(Stream& serial) {
-  serial.println("BLE protocol v5 commands are also accepted over serial:");
+  serial.println("BLE protocol v6 commands are also accepted over serial:");
   serial.println("hello,<id> | status,<id> | record_start,<id>,<label> | record_stop,<id>");
   serial.println("list,<id> | delete,<id>,<name>,<size>,<CRC32> | cancel,<id>");
+  serial.println("identify,<id>,<blue|green>,<500..10000 ms>");
   serial.println("diagnostics: help | stream on | stream off");
 }
 
@@ -661,8 +734,12 @@ void reportRecordingFaultIfNeeded() {
 
 namespace app {
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  setLed(false);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+  setRgbOff();
+  device_identity::begin();
+  deviceLedColor = device_identity::prefersBlue() ? DeviceLedColor::Blue : DeviceLedColor::Green;
   recordingMachine.reset();
   recordingFault[0] = '\0';
 
@@ -673,10 +750,10 @@ void setup() {
     handleFatalError("error,imu_init_failed");
   }
   if (!data_logger::begin()) {
-    handleFatalError("error,storage_mount_failed");
+    handleFatalError(data_logger::lastError());
   }
 
-  const bool bleReady = ble_service::begin();
+  const bool bleReady = ble_service::begin(device_identity::bleName());
   sampleId = 0;
   recordingStartedAtMs = millis();
   refreshCachedFreeBytes();
@@ -686,7 +763,11 @@ void setup() {
     Serial.println(",input_hz=104,output_hz=52,source=data_ready,filter=pair_mean,deadline_guard_us=22000,storage=preallocated,accel_range_g=16,gyro_range_dps=2000");
     if (bleReady) {
       Serial.print("info,ble_advertising,");
-      Serial.println(app_config::kBleDeviceName);
+      Serial.println(device_identity::bleName());
+      Serial.print("info,device_identity,");
+      Serial.print(device_identity::fullId());
+      Serial.print(',');
+      Serial.println(device_identity::filePrefix());
     } else {
       Serial.println("warn,ble_init_failed");
     }
@@ -696,6 +777,7 @@ void setup() {
 }
 
 void loop() {
+  serviceIdentifyLed();
   if (Serial) {
     serial_console::service(Serial, handleSerialCommand);
   }

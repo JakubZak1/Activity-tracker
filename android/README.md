@@ -4,10 +4,10 @@ Native Android/Kotlin companion app for the Activity Tracker embedded project.
 It communicates directly with the XIAO nRF52840 Sense over BLE and stores data
 locally; there are no accounts, cloud services, or backend.
 
-The current milestone is BLE dataset protocol v5: continuous segmented IMU
+The current milestone is BLE dataset protocol v6: two-device continuous segmented IMU
 recording, locked-screen resumable downloads, exact size/CRC32 verification, and
 automatic deletion of only a durably verified board copy. Firmware and Android
-v5 must be upgraded together.
+v6 firmware and Android must be upgraded together. See [`../docs/ble_protocol_v6.md`](../docs/ble_protocol_v6.md).
 
 ## Current status
 

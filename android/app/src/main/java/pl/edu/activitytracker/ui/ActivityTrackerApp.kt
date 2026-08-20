@@ -20,7 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import pl.edu.activitytracker.ui.debug.DebugScreen
-import pl.edu.activitytracker.ui.data.DataCollectionScreen
+import pl.edu.activitytracker.ui.data.MultiDataCollectionScreen
 import pl.edu.activitytracker.ui.home.HomeScreen
 import pl.edu.activitytracker.ui.map.MapScreen
 import pl.edu.activitytracker.ui.settings.SettingsScreen
@@ -42,6 +42,7 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
     val navController = rememberNavController()
     val state by viewModel.trackerState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val multiDatasetState by viewModel.multiDatasetState.collectAsStateWithLifecycle()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route ?: Destination.Home.route
 
@@ -89,18 +90,20 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                 )
             }
             composable(Destination.Data.route) {
-                DataCollectionScreen(
+                MultiDataCollectionScreen(
                     paddingValues = paddingValues,
-                    state = state,
+                    state = multiDatasetState,
                     useMockSource = settings.useMockSource,
-                    onConnect = viewModel::connectDevice,
-                    onDisconnect = viewModel::disconnectDevice,
-                    onStart = viewModel::startDataCollection,
-                    onStop = viewModel::stopDataCollection,
-                    onRefresh = viewModel::refreshDataLogs,
-                    onDownload = viewModel::downloadLog,
-                    onDelete = viewModel::deleteDeviceLog,
-                    onCancelTransfer = viewModel::cancelFileTransfer,
+                    onScan = viewModel::scanDatasetDevices,
+                    onConnect = viewModel::connectDatasetDevice,
+                    onDisconnect = viewModel::disconnectDatasetDevice,
+                    onIdentify = viewModel::identifyDatasetDevice,
+                    onStartBoth = viewModel::startPairedCollection,
+                    onStopBoth = viewModel::stopPairedCollection,
+                    onRefresh = viewModel::refreshDatasetDevice,
+                    onDownload = viewModel::downloadDatasetLog,
+                    onDelete = viewModel::deleteDatasetLog,
+                    onCancel = viewModel::cancelDatasetTransfer,
                     onFolderSelected = viewModel::setDataFolderUri,
                 )
             }

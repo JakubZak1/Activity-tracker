@@ -224,7 +224,9 @@ class BleDeviceDataSource(
             val device = result.device
             val advertisedName = result.scanRecord?.deviceName ?: device.name.orEmpty()
             val matchesId = requestedDeviceId == null || device.address.equals(requestedDeviceId, true)
-            val matchesName = advertisedName.isBlank() || advertisedName.equals(expectedDeviceName, true)
+            val matchesName = advertisedName.isBlank() ||
+                advertisedName.equals(expectedDeviceName, true) ||
+                advertisedName.startsWith("$expectedDeviceName-", true)
             if (matchesId && matchesName && isActiveScan(token)) {
                 stopScan()
                 if (connectionDesired) connectGatt(device)

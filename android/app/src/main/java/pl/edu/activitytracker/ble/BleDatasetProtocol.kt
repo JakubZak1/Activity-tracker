@@ -4,6 +4,7 @@ import pl.edu.activitytracker.domain.ActivityType
 import pl.edu.activitytracker.domain.DeviceCommand
 import pl.edu.activitytracker.domain.DeviceControlResponse
 import pl.edu.activitytracker.domain.DeviceLogFile
+import pl.edu.activitytracker.domain.DeviceLedColor
 import pl.edu.activitytracker.domain.DeviceStatus
 import pl.edu.activitytracker.domain.FileDataFrame
 import pl.edu.activitytracker.domain.MAX_REQUEST_ID
@@ -72,10 +73,19 @@ object BleDatasetProtocol {
         val requestId = parseRequestId(parts[1]) ?: return null
         return when (parts[2]) {
             "hello" -> {
-                if (parts.size != 5) return null
+                if (parts.size != 7) return null
                 val version = parts[3].toIntOrNull()?.takeIf { it >= 0 } ?: return null
-                val capabilities = parts[4].split(';').filter(String::isNotBlank).toSet()
-                DeviceControlResponse.Hello(requestId, version, capabilities)
+                val deviceIdentity = parts[4].takeIf { it.matches(Regex("[0-9A-F]{16}")) } ?: return null
+                val shortId = parts[5].takeIf { it.matches(Regex("[0-9A-F]{8}")) } ?: return null
+                if (!deviceIdentity.endsWith(shortId)) return null
+                val capabilities = parts[6].split(';').filter(String::isNotBlank).toSet()
+                DeviceControlResponse.Hello(requestId, version, deviceIdentity, shortId, capabilities)
+            }
+            "identified" -> {
+                if (parts.size != 5) return null
+                val color = DeviceLedColor.entries.firstOrNull { it.wireName == parts[3] } ?: return null
+                val duration = parts[4].toLongOrNull()?.takeIf { it in 500L..10_000L } ?: return null
+                DeviceControlResponse.Identified(requestId, color, duration)
             }
             "recording_started", "already_recording" -> {
                 if (parts.size != 5 || !isValidFileName(parts[4])) return null

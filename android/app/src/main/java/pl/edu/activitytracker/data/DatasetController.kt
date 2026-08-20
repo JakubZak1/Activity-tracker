@@ -36,6 +36,7 @@ import pl.edu.activitytracker.domain.DatasetState
 import pl.edu.activitytracker.domain.DeviceCommand
 import pl.edu.activitytracker.domain.DeviceControlResponse
 import pl.edu.activitytracker.domain.DeviceLogFile
+import pl.edu.activitytracker.domain.DeviceLedColor
 import pl.edu.activitytracker.domain.DeviceProtocolEvent
 import pl.edu.activitytracker.domain.DeviceStatus
 import pl.edu.activitytracker.domain.FileFrameDecision
@@ -58,6 +59,7 @@ class DatasetController(
     private val fileInactivityMillis: Long = 10_000L,
     private val workRuntime: DatasetWorkRuntime = DatasetWorkRuntime.NoOp,
     private val autoOffloadPollMillis: Long = 2_000L,
+    private val sharedTransferMutex: Mutex = Mutex(),
 ) {
     private data class PendingTransaction(
         val requestId: Long,
@@ -155,9 +157,9 @@ class DatasetController(
         activityType: ActivityType,
         placement: SensorPlacement = SensorPlacement.Unknown,
         bodySide: BodySide = BodySide.Unknown,
-    ) {
-        if (activityType == ActivityType.Unknown) return
-        scope.launch {
+        pairedSessionId: String? = null,
+    ): Job = scope.launch {
+        if (activityType == ActivityType.Unknown) return@launch
             runExclusive {
                 if (!isReady() || _state.value.collection !is CollectionState.Idle || _state.value.transfer.isBusy) {
                     return@runExclusive
@@ -185,11 +187,13 @@ class DatasetController(
                     return@runExclusive
                 }
                 val idleState = _state.value.collection as? CollectionState.Idle ?: return@runExclusive
+                val sessionId = UUID.randomUUID().toString()
                 val sessionMetadata = DatasetSessionMetadata(
                     activity = activityType,
                     placement = placement,
                     bodySide = bodySide,
-                    sessionId = UUID.randomUUID().toString(),
+                    sessionId = sessionId,
+                    pairedSessionId = pairedSessionId ?: sessionId,
                     startedAtEpochMillis = System.currentTimeMillis(),
                 )
                 activeDatasetSession = sessionMetadata
@@ -228,11 +232,9 @@ class DatasetController(
                     }
                 }
             }
-        }
     }
 
-    fun stopRecording() {
-        scope.launch {
+    fun stopRecording(): Job = scope.launch {
             runExclusive {
                 if (!isReady()) return@runExclusive
                 val active = _state.value.collection
@@ -277,6 +279,24 @@ class DatasetController(
                 if (_state.value.collection is CollectionState.Idle) continuousSessionActive = false
                 fileToDownload?.let { downloadAndDeleteLocked(it) }
                 ensureAutoOffloadLoop()
+            }
+    }
+
+    fun identify(color: DeviceLedColor, durationMillis: Long = 5_000L): Job = scope.launch {
+        runExclusive {
+            if (!isReady()) return@runExclusive
+            try {
+                when (val response = awaitSingle(DeviceCommand.Identify(nextRequestId(), color, durationMillis))) {
+                    is DeviceControlResponse.Identified -> {
+                        if (response.color != color) throw ProtocolException("Identify response color mismatch")
+                        _state.update { it.copy(operationMessage = "${color.displayName} identification blink active") }
+                    }
+                    is DeviceControlResponse.Error -> throw DeviceRejectedException(response)
+                    else -> throw ProtocolException("Unexpected response to identify")
+                }
+            } catch (error: Exception) {
+                if (error is CancellationException) throw error
+                showOperationError("Identify failed: ${error.userMessage()}")
             }
         }
     }
@@ -416,7 +436,7 @@ class DatasetController(
             val hello = awaitSingle(DeviceCommand.Hello(nextRequestId()))
             ensureConnectionSession(expectedGeneration, expectedIdentity)
             if (hello !is DeviceControlResponse.Hello) {
-                throw ProtocolException("Device did not return a v5 hello response")
+                throw ProtocolException("Device did not return a v6 hello response")
             }
             val missing = REQUIRED_DATASET_CAPABILITIES - hello.capabilities
             if (hello.protocolVersion != DATASET_PROTOCOL_VERSION || missing.isNotEmpty()) {
@@ -425,9 +445,9 @@ class DatasetController(
                 _state.update {
                     it.copy(
                         connection = DatasetConnectionState.Incompatible(
-                            "Expected protocol 5 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
+                            "Expected protocol 6 with all dataset capabilities; got ${hello.protocolVersion}, missing ${missing.joinToString()}",
                         ),
-                        operationMessage = "Install matching Android and firmware v5 builds.",
+                        operationMessage = "Install matching Android and firmware v6 builds.",
                     )
                 }
                 return
@@ -436,7 +456,13 @@ class DatasetController(
             val status = requestStatusLocked()
             ensureConnectionSession(expectedGeneration, expectedIdentity)
             applyStatus(status)
-            readyInfo = DatasetConnectionState.Ready(hello.protocolVersion, hello.capabilities, expectedIdentity)
+            readyInfo = DatasetConnectionState.Ready(
+                protocolVersion = hello.protocolVersion,
+                capabilities = hello.capabilities,
+                deviceIdentity = hello.deviceIdentity,
+                shortId = hello.shortId,
+                transportIdentity = expectedIdentity,
+            )
             readyGeneration = expectedGeneration
             _state.update { it.copy(connection = requireNotNull(readyInfo), operationMessage = null) }
             if (status !is DeviceStatus.Recording) {
@@ -463,7 +489,7 @@ class DatasetController(
                 it.copy(
                     connection = DatasetConnectionState.Error("Handshake failed: ${error.userMessage()}"),
                     collection = CollectionState.Unknown,
-                    operationMessage = "Reconnect after installing matching v5 firmware.",
+                    operationMessage = "Reconnect after installing matching v6 firmware.",
                 )
             }
         }
@@ -553,9 +579,10 @@ class DatasetController(
         }
         val sorted = files.values.sortedBy(DeviceLogFile::name)
         val folder = _state.value.dataFolderUri
-        val verified = if (folder == null) emptySet() else withContext(ioDispatcher) {
+        val deviceIdentity = readyInfo?.deviceIdentity
+        val verified = if (folder == null || deviceIdentity == null) emptySet() else withContext(ioDispatcher) {
             sorted.mapNotNull { file ->
-                file.identity?.takeIf { identity -> fileStore.isVerified(folder, identity) }
+                file.identity?.takeIf { identity -> fileStore.isVerified(folder, deviceIdentity, identity) }
             }.toSet()
         }
         _state.update {
@@ -563,18 +590,18 @@ class DatasetController(
         }
     }
 
-    private suspend fun downloadLocked(file: DeviceLogFile) {
+    private suspend fun downloadLocked(file: DeviceLogFile) = sharedTransferMutex.withLock {
         val identity = file.identity
         if (!file.isComplete || identity == null) {
             _state.update { it.copy(transfer = TransferState.Error(file, "Incomplete files cannot be downloaded", false)) }
-            return
+            return@withLock
         }
         val folder = _state.value.dataFolderUri
         if (folder == null) {
             _state.update { it.copy(transfer = TransferState.WaitingForFolder(file), operationMessage = "Choose a folder to continue.") }
-            return
+            return@withLock
         }
-        val deviceIdentity = readyInfo?.deviceIdentity ?: return
+        val deviceIdentity = readyInfo?.deviceIdentity ?: return@withLock
         _state.update { it.copy(transfer = TransferState.Preparing(file), operationMessage = "Preparing ${file.name}...") }
         val sessionMetadata = fileSessionMetadata[file.name]
         when (val prepared = withContext(ioDispatcher) {
@@ -618,7 +645,8 @@ class DatasetController(
             return false
         }
         _state.update { it.copy(operationMessage = "Rechecking local size and CRC32 for ${file.name}...") }
-        val stillVerified = withContext(ioDispatcher) { fileStore.isVerified(folder, identity) }
+        val deviceIdentity = readyInfo?.deviceIdentity ?: return false
+        val stillVerified = withContext(ioDispatcher) { fileStore.isVerified(folder, deviceIdentity, identity) }
         val collectionStillAllowsDelete = !requireIdle || _state.value.collection is CollectionState.Idle
         if (_state.value.dataFolderUri != folder || !isReady() || !collectionStillAllowsDelete || !stillVerified) {
             _state.update {

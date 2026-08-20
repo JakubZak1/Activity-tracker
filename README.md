@@ -2,11 +2,11 @@
 
 Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. The current milestone is a reliable BLE-controlled workflow for recording labeled IMU sessions, storing them in QSPI flash, and downloading verified CSV files to an Android phone.
 
-The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v5 is the current source-compatible pair: the firmware and Android app must be upgraded together.
+The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v6 is the current source-compatible pair: the firmware and Android app must be upgraded together.
 
 Current project status:
 
-- BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
+- BLE v6 adds stable per-board IDs, RGB identification, collision-free filenames, and simultaneous wrist/leg collection to the v5 loss-safe segmented recording workflow.
 - The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
 - A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
 - A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. A later long FIFO test exposed word-pattern desynchronization, so those FIFO recordings are diagnostic only. The replacement acquisition runs complete 104 Hz output-register reads in a dedicated high-priority task, averages adjacent pairs to 52 Hz, preallocates each QSPI segment, and stops rather than accepting a raw-frame gap above 22 ms. Its first 30.634 s stationary hardware run produced 1594 valid rows at 52.001 Hz with a maximum raw-frame interval of 9.766 ms; longer and dynamic validation remains pending.
@@ -73,14 +73,14 @@ Key source modules:
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
 
-## BLE Dataset Protocol v5
+## BLE Dataset Protocol v6
 
-The authoritative wire contract is [docs/ble_protocol_v5.md](docs/ble_protocol_v5.md). Protocol v5 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
+The authoritative wire contract is [docs/ble_protocol_v6.md](docs/ble_protocol_v6.md). Protocol v6 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
 
 The board advertises as:
 
 ```text
-ActivityTracker
+ActivityTracker-XXXXXXXX
 ```
 
 Service UUID:
@@ -119,7 +119,7 @@ Incomplete files caused by power loss or write/finalization failure are listed a
 
 BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing, stale-partial recovery, and six physical 1536 KiB locked-screen pause/offload/resume cycles pass.
+The software-only path is described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Single-device timing evidence is recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md), and the first physical two-device v6 smoke test is recorded in [docs/hardware_validation_v6.md](docs/hardware_validation_v6.md).
 
 ## Android MVP App
 

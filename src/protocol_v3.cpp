@@ -272,6 +272,21 @@ ParseResult parseCommand(const char* line, Command& command) {
     strncpy(command.label, fields[2], sizeof(command.label) - 1);
     return {true, command.requestId, nullptr};
   }
+  if (strcmp(fields[0], "identify") == 0) {
+    command.type = CommandType::Identify;
+    if (!requireCount(4)) {
+      return failure(command.requestId, "wrong_argument_count");
+    }
+    if (strcmp(fields[2], "blue") != 0 && strcmp(fields[2], "green") != 0) {
+      return failure(command.requestId, "invalid_color");
+    }
+    if (!parseUnsigned32(fields[3], command.durationMs) ||
+        command.durationMs < 500 || command.durationMs > 10000) {
+      return failure(command.requestId, "invalid_duration");
+    }
+    strncpy(command.color, fields[2], sizeof(command.color) - 1);
+    return {true, command.requestId, nullptr};
+  }
   if (strcmp(fields[0], "download") == 0) {
     command.type = CommandType::Download;
     if (!requireCount(4)) {

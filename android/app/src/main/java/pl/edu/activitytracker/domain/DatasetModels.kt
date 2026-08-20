@@ -1,6 +1,6 @@
 package pl.edu.activitytracker.domain
 
-const val DATASET_PROTOCOL_VERSION = 5
+const val DATASET_PROTOCOL_VERSION = 6
 const val MAX_REQUEST_ID = 0xFFFF_FFFFL
 
 val REQUIRED_DATASET_CAPABILITIES = setOf(
@@ -13,7 +13,15 @@ val REQUIRED_DATASET_CAPABILITIES = setOf(
     "auto_offload",
     "pause_offload",
     "imu_drdy104_mean2_52_deadline_guard",
+    "stable_device_id",
+    "rgb_identify",
+    "unique_filenames",
 )
+
+enum class DeviceLedColor(val wireName: String, val displayName: String) {
+    Blue("blue", "Blue"),
+    Green("green", "Green"),
+}
 
 enum class SensorPlacement(val wireName: String, val displayName: String) {
     Wrist("wrist", "Wrist"),
@@ -32,6 +40,7 @@ data class DatasetSessionMetadata(
     val placement: SensorPlacement,
     val bodySide: BodySide,
     val sessionId: String,
+    val pairedSessionId: String,
     val startedAtEpochMillis: Long,
 )
 
@@ -90,6 +99,8 @@ sealed interface DatasetConnectionState {
         val protocolVersion: Int,
         val capabilities: Set<String>,
         val deviceIdentity: String,
+        val shortId: String,
+        val transportIdentity: String,
     ) : DatasetConnectionState
     data class Incompatible(val message: String) : DatasetConnectionState
     data class Error(val message: String) : DatasetConnectionState
@@ -174,7 +185,15 @@ sealed interface DeviceControlResponse {
     data class Hello(
         override val requestId: Long,
         val protocolVersion: Int,
+        val deviceIdentity: String,
+        val shortId: String,
         val capabilities: Set<String>,
+    ) : DeviceControlResponse
+
+    data class Identified(
+        override val requestId: Long,
+        val color: DeviceLedColor,
+        val durationMillis: Long,
     ) : DeviceControlResponse
 
     data class Status(

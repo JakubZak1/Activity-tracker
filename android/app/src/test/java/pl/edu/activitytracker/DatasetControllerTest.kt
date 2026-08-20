@@ -69,6 +69,8 @@ class DatasetControllerTest {
                     DeviceControlResponse.Hello(
                         command.requestId,
                         DATASET_PROTOCOL_VERSION - 1,
+                        TEST_DEVICE_ID,
+                        TEST_SHORT_ID,
                         REQUIRED_DATASET_CAPABILITIES,
                     ),
                 )
@@ -96,6 +98,8 @@ class DatasetControllerTest {
                     DeviceControlResponse.Hello(
                         command.requestId,
                         DATASET_PROTOCOL_VERSION,
+                        TEST_DEVICE_ID,
+                        TEST_SHORT_ID,
                         REQUIRED_DATASET_CAPABILITIES - "imu_drdy104_mean2_52_deadline_guard",
                     ),
                 )
@@ -121,7 +125,7 @@ class DatasetControllerTest {
         device.handler = { command ->
             when (command) {
                 is DeviceCommand.Hello -> respond(
-                    DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
+                    testHello(command.requestId),
                 )
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(null, 1000)))
                 is DeviceCommand.ListLogs -> respond(DeviceControlResponse.ListEnd(command.requestId, 0))
@@ -163,7 +167,7 @@ class DatasetControllerTest {
         device.handler = { command ->
             when (command) {
                 is DeviceCommand.Hello -> respond(
-                    DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
+                    testHello(command.requestId),
                 )
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, boardStatus))
                 is DeviceCommand.ListLogs -> respond(DeviceControlResponse.ListEnd(command.requestId, 0))
@@ -270,7 +274,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(testHello(command.requestId))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -317,7 +321,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(testHello(command.requestId))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -576,6 +580,8 @@ class DatasetControllerTest {
                         DeviceControlResponse.Hello(
                             command.requestId,
                             DATASET_PROTOCOL_VERSION,
+                            TEST_DEVICE_ID,
+                            TEST_SHORT_ID,
                             REQUIRED_DATASET_CAPABILITIES,
                         ),
                     )
@@ -626,7 +632,11 @@ class DatasetControllerTest {
             }
         }
 
-        override fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean = file in verified
+        override fun isVerified(
+            treeUri: String,
+            deviceIdentity: String,
+            file: RemoteFileIdentity,
+        ): Boolean = file in verified
 
         override fun isFolderAvailable(treeUri: String): Boolean = folderAvailable
     }
@@ -662,6 +672,17 @@ class DatasetControllerTest {
     }
 
     companion object {
+        private const val TEST_DEVICE_ID = "11111111A1B2C3D4"
+        private const val TEST_SHORT_ID = "A1B2C3D4"
+
+        private fun testHello(requestId: Long) = DeviceControlResponse.Hello(
+            requestId,
+            DATASET_PROTOCOL_VERSION,
+            TEST_DEVICE_ID,
+            TEST_SHORT_ID,
+            REQUIRED_DATASET_CAPABILITIES,
+        )
+
         private fun crc32(bytes: ByteArray): String {
             val crc = CRC32().apply { update(bytes) }
             return String.format(Locale.US, "%08X", crc.value)
