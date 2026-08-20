@@ -14,6 +14,7 @@ dataset/raw/**/*.part
 dataset/processed/*
 dataset/models/*
 dataset/results/*
+dataset/test/
 !dataset/sessions.csv
 !dataset/downloads.csv
 !dataset/raw/**/.gitkeep
