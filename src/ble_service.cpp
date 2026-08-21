@@ -241,11 +241,17 @@ void flushControlResponse() {
   }
 
   if (controlIndicationFailed) {
+    if (Serial) {
+      Serial.println("info,ble_indication,failed");
+    }
     controlIndicationFailed = false;
     controlIndicationInFlight = false;
     controlIndicationChunkLength = 0;
   }
   if (controlIndicationConfirmed) {
+    if (Serial) {
+      Serial.println("info,ble_indication,confirmed");
+    }
     controlIndicationConfirmed = false;
     if (controlIndicationInFlight) {
       pendingControlOffset += controlIndicationChunkLength;
@@ -284,6 +290,12 @@ void flushControlResponse() {
       .p_data = reinterpret_cast<uint8_t*>(pendingControlResponse + pendingControlOffset),
   };
   const uint32_t status = sd_ble_gatts_hvx(Bluefruit.connHandle(), &parameters);
+  if (Serial && status == NRF_SUCCESS) {
+    Serial.print("info,ble_indication,submit_status=");
+    Serial.print(status);
+    Serial.print(",length=");
+    Serial.println(submittedLength);
+  }
   if (status == NRF_ERROR_TIMEOUT) {
     requestConnectionReset(Bluefruit.connHandle());
     return;

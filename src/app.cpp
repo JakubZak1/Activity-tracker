@@ -150,7 +150,13 @@ void copyFault(const char* error) {
 
 bool sendResponse(ResponseTransport transport, Stream* serial, const char* response) {
   if (transport == ResponseTransport::Ble) {
-    return ble_service::sendControlResponse(response);
+    const bool queued = ble_service::sendControlResponse(response);
+    if (Serial) {
+      Serial.print("info,ble_control_response,");
+      Serial.print(queued ? "queued," : "failed,");
+      Serial.println(response ? response : "none");
+    }
+    return queued;
   }
   if (serial) {
     serial->println(response);
@@ -666,6 +672,10 @@ void parseAndDispatch(ResponseTransport transport, Stream* serial, const char* l
 void serviceBleCommands() {
   char command[app_config::kBleCommandBufferSize] = {0};
   if (ble_service::takeCommand(command, sizeof(command))) {
+    if (Serial) {
+      Serial.print("info,ble_command,");
+      Serial.println(command);
+    }
     parseAndDispatch(ResponseTransport::Ble, nullptr, command);
   }
 }

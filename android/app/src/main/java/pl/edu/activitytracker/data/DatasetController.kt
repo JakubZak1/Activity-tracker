@@ -489,7 +489,7 @@ class DatasetController(
                 it.copy(
                     connection = DatasetConnectionState.Error("Handshake failed: ${error.userMessage()}"),
                     collection = CollectionState.Unknown,
-                    operationMessage = "Reconnect after installing matching v6 firmware.",
+                    operationMessage = "Disconnect and reconnect this board. Install firmware only for an explicit protocol-version mismatch.",
                 )
             }
         }
@@ -936,11 +936,21 @@ class DatasetController(
             is DeviceProtocolEvent.FileData -> event.frame.requestId == target.requestId
             is DeviceProtocolEvent.Fault -> true
         }
-        if (requestMatches) {
-            try {
-                target.events.send(event)
-            } catch (_: Exception) {
-                // The transaction was completed or cancelled while this callback was being routed.
+        if (requestMatches && target.events.trySend(event).isFailure) {
+            val overflow = ProtocolException("Transaction event buffer overflow")
+            val wasPending = synchronized(pendingLock) {
+                if (pending === target) {
+                    pending = null
+                    true
+                } else {
+                    false
+                }
+            }
+            if (wasPending) {
+                // Never suspend the sole protocol-event collector behind a slow
+                // or abandoned transfer. The caller will retain its .part file
+                // and resume from the last verified offset after reconnecting.
+                target.events.close(overflow)
             }
         }
     }
@@ -1029,7 +1039,9 @@ class DatasetController(
 
     companion object {
         private const val ASYNC_REQUEST_ID = 0L
-        private const val PENDING_EVENT_CAPACITY = 32
+        // Large enough to absorb short Android/SAF scheduling stalls while
+        // remaining bounded. At MTU 247 this is roughly 60 KiB of file data.
+        private const val PENDING_EVENT_CAPACITY = 256
         private const val FILE_WRITE_BATCH_BYTES = 8 * 1024
     }
 }
