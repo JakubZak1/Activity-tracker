@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
@@ -34,6 +35,7 @@ data class DatasetSlotState(
     val transportConnection: ConnectionState = ConnectionState.Disconnected,
     val dataset: DatasetState = DatasetState(),
     val configuredAddress: String? = null,
+    val battery: BatteryReading? = null,
 )
 
 data class MultiDeviceDatasetState(
@@ -88,6 +90,11 @@ class MultiDeviceDatasetManager(
                 runtime.controller.state.collect { dataset ->
                     updateSlot(slot) { it.copy(dataset = dataset) }
                     updateForegroundRuntime()
+                }
+            }
+            scope.launch {
+                runtime.source.battery.collect { battery ->
+                    updateSlot(slot) { it.copy(battery = battery) }
                 }
             }
         }

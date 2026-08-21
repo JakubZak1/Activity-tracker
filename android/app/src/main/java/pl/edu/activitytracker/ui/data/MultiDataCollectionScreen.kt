@@ -38,6 +38,7 @@ import pl.edu.activitytracker.data.DatasetSlotState
 import pl.edu.activitytracker.data.DiscoveredDatasetDevice
 import pl.edu.activitytracker.data.MultiDeviceDatasetState
 import pl.edu.activitytracker.domain.ActivityType
+import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.BodySide
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
@@ -241,6 +242,21 @@ private fun SlotCard(
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(slotState.slot.displayName, style = MaterialTheme.typography.titleMedium)
             Text(connectionText(slotState))
+            val battery = slotState.battery
+            Text(
+                batteryText(battery),
+                color = if (battery != null && battery.percent <= LOW_BATTERY_PERCENT) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+            if (battery != null && battery.percent <= LOW_BATTERY_PERCENT) {
+                Text(
+                    "Low battery — charge before a long recording.",
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             dataset.operationMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onIdentify(slotState.slot) }, enabled = ready) { Text("Blink ${slotState.slot.color.displayName}") }
@@ -297,6 +313,16 @@ private fun connectionText(state: DatasetSlotState): String = when (val connecti
     is DatasetConnectionState.Error -> "Error: ${connection.message}"
 }
 
+internal fun batteryText(
+    reading: BatteryReading?,
+    nowMillis: Long = System.currentTimeMillis(),
+): String {
+    if (reading == null) return "Battery: waiting for reading…"
+    val ageSeconds = ((nowMillis - reading.timestampMillis).coerceAtLeast(0L)) / 1_000L
+    val freshness = if (ageSeconds > BATTERY_STALE_SECONDS) "stale" else "updated ${ageSeconds}s ago"
+    return "Battery: ~${reading.percent}% • ${reading.voltageMv} mV • $freshness"
+}
+
 private fun collectionText(state: CollectionState): String = when (state) {
     CollectionState.Unknown -> "Recording state unknown"
     is CollectionState.Idle -> "Idle • free ${state.freeBytes ?: 0} B"
@@ -327,3 +353,6 @@ private val DATASET_ACTIVITIES = listOf(
     ActivityType.Sitting,
     ActivityType.Lying,
 )
+
+private const val LOW_BATTERY_PERCENT = 20
+private const val BATTERY_STALE_SECONDS = 90L
