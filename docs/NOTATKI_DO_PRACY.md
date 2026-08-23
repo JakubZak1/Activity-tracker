@@ -609,3 +609,20 @@ należy odróżniać cztery poziomy pewności:
   zależność i pozwolił przejść 7/7 testów także przy aktywnym lockscreenie. Nie
   należy jednak mylić tego z walidacją ciągłości prawdziwego BLE w tle — to
   osobny test usługi pierwszoplanowej.
+
+## 13. Fizyczna walidacja sesji Home przy zablokowanym ekranie
+
+- **Potwierdzone (2026-08-23):** Green `18EE26A8` pozostał połączony podczas
+  krótkiej sesji Home obejmującej około minutę z zablokowanym telefonem. Po
+  odblokowaniu sesja nadal trwała i została normalnie zatrzymana.
+- Zapis w History miał status `Completed`, czas całkowity 01:27, czas
+  `sitting` 01:27, 0 kroków i 2,31 kcal. Ponieważ czas `sitting` był równy
+  całkowitemu, `unknown` wyniósł 0 s; brak osobnego niezerowego wiersza w UI
+  nie oznacza braku tej kategorii w modelu danych.
+- Automatyczny eksport zakończył się stanem `Exported` i utworzył
+  `home_20260823_221926_0b6a66f6.json` oraz odpowiadający mu plik
+  `_route.csv`. Kontrola ADB potwierdziła obecność obu plików; CSV miał cztery
+  wiersze (nagłówek i trzy punkty GPS).
+- **Wniosek:** test fizycznie potwierdza ciągłość ścieżki Green BLE → agregacja
+  czasu → Stop → SQLite/History → eksport SAF przy krótkiej blokadzie ekranu.
+  Nie jest to jednak długoterminowy test baterii ani odporności BLE.

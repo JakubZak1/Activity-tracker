@@ -76,14 +76,27 @@ it must not be misreported as a physical BLE background-continuity test.
   curation decisions and calibration profiles are preserved under `dataset/`
   and `docs/` (generated artifacts are intentionally ignored by Git).
 
-## One remaining physical acceptance action
+## Final physical Home acceptance
 
-Green was not visible over USB during the final software run. Before claiming
-the complete physical release matrix, install the final APK, power Green, and
-perform one short sitting Home session including a locked-screen interval. Stop
-after unlocking and verify: saved History row, sensible sitting/unknown split,
-steps, calories, JSON export and route CSV. No walking, running, cycling or new
-dataset collection is required.
+The final APK and Green `18EE26A8` passed the physical Home acceptance test on
+2026-08-23. A sitting session included approximately one minute with the phone
+locked and remained active after unlocking. It then stopped normally and was
+stored in History as `Completed` with:
+
+- total duration: 01:27;
+- sitting: 01:27, unknown: 00:00;
+- steps: 0;
+- estimated calories: 2.31 kcal;
+- export: `home_20260823_221926_0b6a66f6.json` and its `_route.csv`, status
+  `Exported`.
+
+The exact equality of total and sitting duration confirms that no interval was
+lost or assigned to stale/disconnected telemetry in this run. Zero steps are
+the expected result for a sitting test. The test provides physical evidence
+that the foreground session, Green BLE telemetry, final Stop, SQLite History
+and automatic SAF summary export work across a locked-screen interval.
+ADB verification found both final files on the phone; the 209-byte route CSV
+contained four lines (header plus three GPS points).
 
 ## Explicit limitations for the thesis
 
