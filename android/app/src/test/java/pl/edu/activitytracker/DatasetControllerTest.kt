@@ -30,6 +30,7 @@ import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.ActivityType
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.BodySide
+import pl.edu.activitytracker.domain.CalorieCalculator
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
@@ -442,6 +443,7 @@ class DatasetControllerTest {
             sessionRecordingController = phoneSession,
             settingsStore = FakeSettingsStore(),
             scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
         )
         runCurrent()
 
@@ -455,6 +457,81 @@ class DatasetControllerTest {
         assertEquals(2, phoneSession.stops)
         assertEquals(1, location.starts)
         assertEquals(2, location.stops)
+    }
+
+    @Test
+    fun phoneSessionUsesDeviceStepDeltasAndSurvivesCounterReset() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val dataset = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = dataset,
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+
+        device.emitSummary(100)
+        runCurrent()
+        repository.startSession()
+        device.emitSummary(104)
+        device.emitSummary(109)
+        runCurrent()
+        assertEquals(9, repository.state.value.sessionSteps)
+
+        repository.stopSession()
+        device.emitSummary(115)
+        runCurrent()
+        assertEquals(9, repository.state.value.sessionSteps)
+
+        repository.startSession()
+        device.emitSummary(118)
+        device.emitSummary(2) // Device reboot: the new counter starts again at zero.
+        runCurrent()
+        assertEquals(5, repository.state.value.sessionSteps)
+    }
+
+    @Test
+    fun phoneSessionUsesMonotonicDurationAndIntegratesCaloriesByActivity() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val dataset = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = dataset,
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+
+        device.emitActivity(ActivityType.Walking)
+        runCurrent()
+        repository.startSession()
+        advanceTimeBy(10_000L)
+        runCurrent()
+
+        device.emitActivity(ActivityType.Running)
+        runCurrent()
+        advanceTimeBy(20_000L)
+        runCurrent()
+
+        val expected = CalorieCalculator.caloriesFor(ActivityType.Walking, 70.0, 10.0 / 60.0) +
+            CalorieCalculator.caloriesFor(ActivityType.Running, 70.0, 20.0 / 60.0)
+        assertEquals(30L, repository.state.value.sessionDurationSeconds)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
+
+        repository.stopSession()
+        advanceTimeBy(5_000L)
+        runCurrent()
+        assertEquals(30L, repository.state.value.sessionDurationSeconds)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
     }
 
     @Test
@@ -520,9 +597,11 @@ class DatasetControllerTest {
         override val connectionGeneration: StateFlow<Long> = _generation.asStateFlow()
         private val _identity = MutableStateFlow<String?>(null)
         override val deviceIdentity: StateFlow<String?> = _identity.asStateFlow()
-        override val activity: Flow<ActivityReading> = emptyFlow()
+        private val _activity = MutableStateFlow(ActivityReading.unknown(0L))
+        override val activity: Flow<ActivityReading> = _activity
         override val battery: Flow<BatteryReading> = emptyFlow()
-        override val summary: Flow<SummaryReading> = emptyFlow()
+        private val _summary = MutableSharedFlow<SummaryReading>(replay = 1, extraBufferCapacity = 8)
+        override val summary: Flow<SummaryReading> = _summary
         override val rawEvents: Flow<RawDeviceEvent> = emptyFlow()
         private val events = Channel<DeviceProtocolEvent>(64)
         override val protocolEvents = events.receiveAsFlow()
@@ -571,6 +650,26 @@ class DatasetControllerTest {
             _generation.value += 1
             _identity.value = null
             _connection.value = ConnectionState.Disconnected
+        }
+
+        suspend fun emitSummary(steps: Int) {
+            _summary.emit(
+                SummaryReading(
+                    sessionDurationSeconds = 0L,
+                    currentActivity = ActivityType.Walking,
+                    steps = steps,
+                    timestampMillis = 0L,
+                ),
+            )
+        }
+
+        fun emitActivity(type: ActivityType) {
+            _activity.value = ActivityReading(
+                type = type,
+                confidencePercent = 100,
+                durationSeconds = 0L,
+                timestampMillis = 0L,
+            )
         }
 
         fun installIdleProtocolHandler() {

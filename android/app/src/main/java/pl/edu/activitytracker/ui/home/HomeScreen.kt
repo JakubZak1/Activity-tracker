@@ -135,12 +135,12 @@ fun HomeScreen(
                 listOf(
                     Metric("Current activity", state.currentActivity.type.displayName),
                     Metric("Confidence", "${state.currentActivity.confidencePercent}%"),
-                    Metric("Activity time", formatDuration(state.currentActivity.durationSeconds)),
+                    Metric("Current activity time", formatDuration(state.currentActivity.durationSeconds)),
                     Metric("Battery", battery?.let { "${it.percent}%" } ?: "--"),
                     Metric("Voltage", battery?.let { "${it.voltageMv} mV" } ?: "--"),
                     Metric("Session", formatDuration(state.sessionDurationSeconds)),
                     Metric("Calories (est.)", String.format(Locale.US, "%.1f kcal", state.caloriesKcal)),
-                    Metric("Steps", "${state.summary?.steps ?: 0}"),
+                    Metric("Steps", "${state.sessionSteps}"),
                 ),
             ) { metric ->
                 MetricCard(metric)

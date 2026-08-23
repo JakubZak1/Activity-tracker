@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--manifest",
-        default="dataset/sessions.csv",
+        default="dataset/processed/session_manifest.csv",
         type=Path,
         help="Session manifest CSV path.",
     )
@@ -61,7 +61,7 @@ def read_manifest(manifest_path: Path) -> dict[str, dict[str, str]]:
 def iter_csv_files(raw_dir: Path) -> Iterable[Path]:
     if not raw_dir.exists():
         return []
-    return sorted(path for path in raw_dir.glob("*.csv") if path.is_file())
+    return sorted(path for path in raw_dir.rglob("*.csv") if path.is_file())
 
 
 def validate_numeric(row: dict[str, str], column: str, issues: list[str], row_number: int) -> None:

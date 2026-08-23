@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "activity_state.h"
+#include "activity_classifier.h"
 #include "app_config.h"
 #include "battery_reader.h"
 #include "ble_service.h"
@@ -15,6 +16,7 @@
 #include "imu_reader.h"
 #include "protocol_v3.h"
 #include "serial_console.h"
+#include "step_counter.h"
 
 namespace {
 enum class ResponseTransport : uint8_t {
@@ -35,6 +37,12 @@ bool hasPendingOffload = false;
 char pendingOffloadLabel[app_config::kActivityLabelBufferSize] = {0};
 uint32_t cachedFreeBytes = 0;
 uint32_t recordingFreeBytesAtStart = 0;
+bool samplingRuntimeActive = false;
+uint32_t nextIdleInferenceRetryMs = 0;
+uint8_t inferredClass = 255;
+uint8_t inferredConfidence = 0;
+uint8_t candidateClass = 255;
+uint8_t candidateCount = 0;
 
 enum class DeviceLedColor : uint8_t {
   Blue,
@@ -118,8 +126,63 @@ void printCaptureStats(Stream& serial) {
   serial.println(capture.deadlineMisses);
 }
 
+void resetInferencePrediction() {
+  activity_classifier::reset();
+  inferredClass = 255;
+  inferredConfidence = 0;
+  candidateClass = 255;
+  candidateCount = 0;
+  ble_service::updateActivity("unknown", 0);
+}
+
+void handleInferencePrediction(
+    const activity_classifier::Prediction& prediction,
+    uint32_t computationUs) {
+  if (inferredClass == 255) {
+    inferredClass = prediction.classIndex;
+    inferredConfidence = prediction.confidencePercent;
+  } else if (prediction.classIndex == inferredClass) {
+    inferredConfidence = prediction.confidencePercent;
+    candidateClass = 255;
+    candidateCount = 0;
+  } else if (prediction.classIndex == candidateClass) {
+    if (candidateCount < 255) ++candidateCount;
+    if (candidateCount >= 2) {
+      inferredClass = prediction.classIndex;
+      inferredConfidence = prediction.confidencePercent;
+      candidateClass = 255;
+      candidateCount = 0;
+    }
+  } else {
+    candidateClass = prediction.classIndex;
+    candidateCount = 1;
+  }
+  ble_service::updateActivity(activity_classifier::label(inferredClass), inferredConfidence);
+  if (Serial) {
+    Serial.print("info,inference,raw=");
+    Serial.print(activity_classifier::label(prediction.classIndex));
+    Serial.print(",published=");
+    Serial.print(activity_classifier::label(inferredClass));
+    Serial.print(",confidence=");
+    Serial.print(inferredConfidence);
+    Serial.print(",compute_us=");
+    Serial.println(computationUs);
+  }
+}
+
+void stopSamplingRuntime() {
+  step_counter::endCapture();
+  ble_service::updateStepCount(step_counter::totalSteps());
+  imu_reader::stopCapture();
+  samplingRuntimeActive = false;
+}
+
 bool startSamplingRuntime(bool newRecording) {
   const uint32_t now = millis();
+  if (samplingRuntimeActive) {
+    step_counter::endCapture();
+    ble_service::updateStepCount(step_counter::totalSteps());
+  }
   if (newRecording) {
     sampleId = 0;
     recordingStartedAtMs = now;
@@ -128,7 +191,20 @@ bool startSamplingRuntime(bool newRecording) {
     faultBleWasConnected = false;
   }
   setLed(false);
-  return imu_reader::startCapture(now);
+  resetInferencePrediction();
+  step_counter::beginCapture();
+  samplingRuntimeActive = imu_reader::startCapture(now);
+  if (!samplingRuntimeActive) step_counter::endCapture();
+  return samplingRuntimeActive;
+}
+
+bool startIdleInferenceRuntime() {
+  if (!activity_classifier::enabled()) return true;
+  const bool started = startSamplingRuntime(false);
+  if (!started) {
+    nextIdleInferenceRetryMs = millis() + 2000;
+  }
+  return started;
 }
 
 void copyFault(const char* error) {
@@ -136,7 +212,7 @@ void copyFault(const char* error) {
   // paths may update their own last-error buffers.
   strncpy(recordingFault, error ? error : "recording_failed", sizeof(recordingFault) - 1);
   recordingFault[sizeof(recordingFault) - 1] = '\0';
-  imu_reader::stopCapture();
+  stopSamplingRuntime();
   if (data_logger::isLogging()) {
     data_logger::abortSession();
   }
@@ -440,7 +516,7 @@ void handleRecordStop(
     return;
   }
 
-  imu_reader::stopCapture();
+  stopSamplingRuntime();
   if (Serial) {
     printCaptureStats(Serial);
   }
@@ -455,6 +531,7 @@ void handleRecordStop(
     sendError(transport, serial, command.requestId, recordingFault);
     return;
   }
+  startIdleInferenceRuntime();
   setLed(false);
   char crcText[9] = {0};
   crc32::format(info.crc32, crcText);
@@ -764,9 +841,14 @@ void setup() {
   }
 
   const bool bleReady = ble_service::begin(device_identity::bleName());
+  const bool classifierEnabled = activity_classifier::begin(device_identity::shortId());
+  step_counter::begin(classifierEnabled);
   sampleId = 0;
   recordingStartedAtMs = millis();
   refreshCachedFreeBytes();
+  if (activity_classifier::enabled() && !startIdleInferenceRuntime()) {
+    handleFatalError("error,inference_capture_failed");
+  }
   if (Serial) {
     Serial.print("info,imu_config,address=0x");
     Serial.print(imu_reader::activeAddress(), HEX);
@@ -782,6 +864,8 @@ void setup() {
       Serial.println("warn,ble_init_failed");
     }
     Serial.println("info,recording,idle");
+    Serial.print("info,inference,");
+    Serial.println(activity_classifier::enabled() ? "leg_rf_v2" : "disabled_for_device");
     printHelp(Serial);
   }
 }
@@ -794,7 +878,13 @@ void loop() {
   ble_service::service();
   serviceBleCommands();
 
-  if (recordingMachine.state() != activity_state::RecordingState::Recording) {
+  if (!samplingRuntimeActive && activity_classifier::enabled() &&
+      recordingMachine.state() != activity_state::RecordingState::Fault &&
+      static_cast<int32_t>(millis() - nextIdleInferenceRetryMs) >= 0) {
+    startIdleInferenceRuntime();
+  }
+
+  if (!samplingRuntimeActive) {
     reportRecordingFaultIfNeeded();
     delay(10);
     return;
@@ -806,11 +896,36 @@ void loop() {
     return;
   }
   if (readResult != imu_reader::ReadResult::Sample) {
-    copyFault(imu_reader::lastError());
+    if (recordingMachine.state() == activity_state::RecordingState::Recording) {
+      copyFault(imu_reader::lastError());
+    } else {
+      if (Serial) {
+        Serial.print("warn,inference_capture,");
+        Serial.println(imu_reader::lastError());
+      }
+      stopSamplingRuntime();
+      resetInferencePrediction();
+      nextIdleInferenceRetryMs = millis() + 2000;
+    }
     reportRecordingFaultIfNeeded();
     return;
   }
   ++sampleId;
+  step_counter::push(sample);
+  if (activity_classifier::enabled()) {
+    activity_classifier::Prediction prediction = {};
+    const uint32_t inferenceStartedAtUs = micros();
+    if (activity_classifier::push(sample, prediction)) {
+      const char* rawLabel = activity_classifier::label(prediction.classIndex);
+      const bool stepActivity = strcmp(rawLabel, "walking") == 0 || strcmp(rawLabel, "running") == 0;
+      step_counter::classifyWindow(sample.timestampMs, stepActivity);
+      ble_service::updateStepCount(step_counter::totalSteps());
+      handleInferencePrediction(prediction, micros() - inferenceStartedAtUs);
+    }
+  }
+  if (recordingMachine.state() != activity_state::RecordingState::Recording) {
+    return;
+  }
   if (!data_logger::writeSample(sample, data_logger::currentLabel(), serialStreaming, Serial)) {
     copyFault(data_logger::lastError());
     reportRecordingFaultIfNeeded();
@@ -834,7 +949,7 @@ void loop() {
           : 0;
   if (activity_state::shouldRotateSegment(currentBytes, app_config::kSegmentMaxBytes) ||
       activity_state::shouldRotateSegment(currentBytes, safeBytesForSegment)) {
-    imu_reader::stopCapture();
+    stopSamplingRuntime();
     if (Serial) {
       printCaptureStats(Serial);
     }
@@ -855,6 +970,7 @@ void loop() {
       reportRecordingFaultIfNeeded();
       return;
     }
+    startIdleInferenceRuntime();
     pendingOffload = completed;
     hasPendingOffload = true;
     if (!refreshCachedFreeBytes()) {

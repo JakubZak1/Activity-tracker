@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "purpose": "read_only_live_inference_diagnostic",
+  "dataset_root": "dataset/raw/holdout/test",
+  "subject_id": "S01",
+  "placements": {
+    "18EE26A8": "leg"
+  },
+  "label_corrections": {},
+  "metadata_overrides": {},
+  "excluded_files": {},
+  "excluded_intervals": [],
+  "notes": [
+    "These sessions were recorded after embedded-model deployment to diagnose tempo and turning-direction failures.",
+    "They are not training data and must not be merged into dataset/raw/own without an explicit later protocol decision.",
+    "opis.txt records the user-reported maneuver for each file."
+  ]
+}

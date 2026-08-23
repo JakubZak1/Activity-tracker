@@ -72,6 +72,10 @@ char transportError[64] = {0};
 uint32_t startedAtMs = 0;
 uint32_t nextTelemetryMs = 0;
 uint32_t nextBatteryMs = 0;
+char inferredActivity[16] = "unknown";
+uint8_t inferredConfidencePercent = 0;
+uint32_t inferredActivityStartedAtMs = 0;
+uint32_t stepCount = 0;
 
 void setTransportError(const char* error) {
   strncpy(transportError, error ? error : "unknown", sizeof(transportError) - 1);
@@ -137,7 +141,16 @@ void writeAndNotify(BLECharacteristic& characteristic, const char* payload) {
 }
 
 void publishActivity() {
-  writeAndNotify(currentActivityCharacteristic, "unknown,0,0");
+  char payload[app_config::kBlePayloadBufferSize] = {0};
+  const uint32_t durationSeconds = (millis() - inferredActivityStartedAtMs) / 1000;
+  snprintf(
+      payload,
+      sizeof(payload),
+      "%s,%u,%lu",
+      inferredActivity,
+      inferredConfidencePercent,
+      static_cast<unsigned long>(durationSeconds));
+  writeAndNotify(currentActivityCharacteristic, payload);
 }
 
 void publishBattery() {
@@ -150,7 +163,13 @@ void publishBattery() {
 void publishSummary() {
   const uint32_t durationSeconds = (millis() - startedAtMs) / 1000;
   char payload[app_config::kBlePayloadBufferSize] = {0};
-  snprintf(payload, sizeof(payload), "%lu,unknown,0", static_cast<unsigned long>(durationSeconds));
+  snprintf(
+      payload,
+      sizeof(payload),
+      "%lu,%s,%lu",
+      static_cast<unsigned long>(durationSeconds),
+      inferredActivity,
+      static_cast<unsigned long>(stepCount));
   writeAndNotify(summaryCharacteristic, payload);
 }
 
@@ -567,6 +586,7 @@ bool begin(const char* deviceName) {
 
   initialized = true;
   startedAtMs = millis();
+  inferredActivityStartedAtMs = startedAtMs;
   publishTelemetry();
   nextTelemetryMs = startedAtMs + app_config::kBleTelemetryIntervalMs;
   nextBatteryMs = startedAtMs + app_config::kBleBatteryIntervalMs;
@@ -644,6 +664,23 @@ bool hasPendingControlResponse() {
 }
 
 void requestTelemetry() {
+  telemetryRequested = true;
+}
+
+void updateActivity(const char* label, uint8_t confidencePercent) {
+  const char* safeLabel = label && label[0] ? label : "unknown";
+  if (strcmp(inferredActivity, safeLabel) != 0) {
+    strncpy(inferredActivity, safeLabel, sizeof(inferredActivity) - 1);
+    inferredActivity[sizeof(inferredActivity) - 1] = '\0';
+    inferredActivityStartedAtMs = millis();
+  }
+  inferredConfidencePercent = confidencePercent > 100 ? 100 : confidencePercent;
+  telemetryRequested = true;
+}
+
+void updateStepCount(uint32_t steps) {
+  if (stepCount == steps) return;
+  stepCount = steps;
   telemetryRequested = true;
 }
 

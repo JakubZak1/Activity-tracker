@@ -1,5 +1,6 @@
 package pl.edu.activitytracker.data
 
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +38,7 @@ data class TrackerState(
     val isSessionRunning: Boolean = false,
     val sessionStartedAtMillis: Long? = null,
     val sessionDurationSeconds: Long = 0L,
+    val sessionSteps: Int = 0,
     val currentActivity: ActivityReading = ActivityReading.unknown(),
     val battery: pl.edu.activitytracker.domain.BatteryReading? = null,
     val summary: pl.edu.activitytracker.domain.SummaryReading? = null,
@@ -57,11 +59,14 @@ class ActivityTrackerRepository(
     private val settingsStore: SettingsDataSource,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     private val reconnectDelaysMillis: List<Long> = DEFAULT_RECONNECT_DELAYS_MILLIS,
+    private val elapsedRealtimeMillis: () -> Long = SystemClock::elapsedRealtime,
 ) {
     private val _state = MutableStateFlow(TrackerState())
     val state: StateFlow<TrackerState> = _state.asStateFlow()
     private var weightKg = SettingsStore.DEFAULT_WEIGHT_KG
     private var lastCalorieTickMillis: Long? = null
+    private var sessionStartedAtElapsedMillis: Long? = null
+    private var lastDeviceStepTotal: Int? = null
     private val connectionActionMutex = Mutex()
     private val reconnectLock = Any()
     private var reconnectJob: Job? = null
@@ -117,7 +122,25 @@ class ActivityTrackerRepository(
         }
         scope.launch {
             deviceDataSource.summary.collect { reading ->
-                _state.update { it.copy(summary = reading, lastUpdateMillis = reading.timestampMillis) }
+                val previousTotal = lastDeviceStepTotal
+                lastDeviceStepTotal = reading.steps
+                _state.update { current ->
+                    val delta = if (current.isSessionRunning && previousTotal != null) {
+                        if (reading.steps >= previousTotal) {
+                            reading.steps - previousTotal
+                        } else {
+                            // Treat a lower total as a device reboot/counter reset.
+                            reading.steps
+                        }
+                    } else {
+                        0
+                    }
+                    current.copy(
+                        summary = reading,
+                        sessionSteps = current.sessionSteps + delta,
+                        lastUpdateMillis = reading.timestampMillis,
+                    )
+                }
             }
         }
         scope.launch {
@@ -189,12 +212,16 @@ class ActivityTrackerRepository(
     // Home sessions are phone-side GPS/calorie sessions. They never mutate the dataset logger.
     fun startSession() {
         val now = System.currentTimeMillis()
-        lastCalorieTickMillis = now
+        val elapsedNow = elapsedRealtimeMillis()
+        lastCalorieTickMillis = elapsedNow
+        sessionStartedAtElapsedMillis = elapsedNow
+        lastDeviceStepTotal = _state.value.summary?.steps
         _state.update {
             it.copy(
                 isSessionRunning = true,
                 sessionStartedAtMillis = now,
                 sessionDurationSeconds = 0L,
+                sessionSteps = 0,
                 caloriesKcal = 0.0,
                 route = emptyList(),
             )
@@ -212,11 +239,13 @@ class ActivityTrackerRepository(
 
     fun resetSession() {
         lastCalorieTickMillis = null
+        sessionStartedAtElapsedMillis = null
         _state.update {
             it.copy(
                 isSessionRunning = false,
                 sessionStartedAtMillis = null,
                 sessionDurationSeconds = 0L,
+                sessionSteps = 0,
                 caloriesKcal = 0.0,
                 route = emptyList(),
                 rawEvents = emptyList(),
@@ -261,9 +290,9 @@ class ActivityTrackerRepository(
     fun stopLocation() = locationTracker.stop()
 
     private fun tickSession() {
-        val now = System.currentTimeMillis()
         val snapshot = _state.value
         if (!snapshot.isSessionRunning) return
+        val now = elapsedRealtimeMillis()
         val previousTick = lastCalorieTickMillis ?: now
         val deltaMinutes = (now - previousTick).coerceAtLeast(0L) / 60_000.0
         val caloriesDelta = CalorieCalculator.caloriesFor(
@@ -272,7 +301,7 @@ class ActivityTrackerRepository(
             minutes = deltaMinutes,
         )
         lastCalorieTickMillis = now
-        val startedAt = snapshot.sessionStartedAtMillis ?: now
+        val startedAt = sessionStartedAtElapsedMillis ?: now
         _state.update {
             it.copy(
                 sessionDurationSeconds = ((now - startedAt) / 1_000L).coerceAtLeast(0L),

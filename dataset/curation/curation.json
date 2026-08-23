@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "dataset_root": "dataset/raw/own",
+  "subject_id": "S01",
+  "placements": {
+    "18EE26A8": "leg",
+    "872F1832": "wrist"
+  },
+  "label_corrections": {
+    "18ee26a8_running_27.csv": {
+      "original_file": "18ee26a8_walking_27.csv",
+      "original_label": "walking",
+      "corrected_label": "running",
+      "actual_size_bytes": 1133659,
+      "actual_crc32": "F9BB1B66",
+      "reason": "The phone was set to walking, but the recorded activity was running. The user corrected the copied CSV and filename; the untouched original remains in the phone backup."
+    },
+    "872f1832_running_40.csv": {
+      "original_file": "872f1832_walking_40.csv",
+      "original_label": "walking",
+      "corrected_label": "running",
+      "actual_size_bytes": 1123337,
+      "actual_crc32": "DAF28D0E",
+      "reason": "Paired wrist recording of the same intentionally corrected running session. The untouched original remains in the phone backup."
+    }
+  },
+  "metadata_overrides": {
+    "872f1832_running_34.csv": {
+      "device_identity": "7F1F9F0D872F1832",
+      "sensor_placement": "wrist",
+      "body_side": "left",
+      "activity": "running",
+      "paired_session_id": "a041fcd0-61a5-42a5-8666-ec95b17e47c7",
+      "paired_with": "18ee26a8_running_21.csv",
+      "actual_size_bytes": 981972,
+      "actual_crc32": "8C83919D",
+      "reason": "The CSV is complete and healthy, but its Android sidecar is missing. Pairing is recovered from the simultaneously recorded leg session and recording chronology."
+    }
+  },
+  "excluded_files": {
+    "872f1832_running_26.csv": "Technical tail: only 4 samples.",
+    "18ee26a8_running_13.csv": "Technical tail: about 5.9 seconds and mostly session ending/low motion.",
+    "872f1832_running_36.csv": "Technical tail: only 1 sample.",
+    "18ee26a8_running_23.csv": "Technical tail: about 1.4 seconds.",
+    "872f1832_walking_33.csv": "Technical tail: about 9.1 seconds.",
+    "18ee26a8_walking_33.csv": "Technical tail: only 3 samples.",
+    "872f1832_walking_46.csv": "Technical tail: only 3 samples.",
+    "18ee26a8_walking_35.csv": "Technical tail: only 3 samples.",
+    "872f1832_walking_48.csv": "Technical tail: only 4 samples."
+  },
+  "excluded_intervals": [
+    {"source_file": "18ee26a8_cycling_14.csv", "start_s": 60, "end_s": 65, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_14.csv", "start_s": 155, "end_s": 160, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_14.csv", "start_s": 170, "end_s": 175, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_14.csv", "start_s": 180, "end_s": 225, "reason": "extended stop/non-cycling interval", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_14.csv", "start_s": 235, "end_s": 245, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_15.csv", "start_s": 45, "end_s": 50, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_15.csv", "start_s": 210, "end_s": 215, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_15.csv", "start_s": 265, "end_s": 275, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_16.csv", "start_s": 105, "end_s": 110, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_16.csv", "start_s": 170, "end_s": 175, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_16.csv", "start_s": 425, "end_s": 430, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 15, "end_s": 20, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 100, "end_s": 105, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 175, "end_s": 185, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 275, "end_s": 280, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 290, "end_s": 295, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_17.csv", "start_s": 310, "end_s": 330, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_25.csv", "start_s": 360, "end_s": 365, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_25.csv", "start_s": 390, "end_s": 400, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true},
+    {"source_file": "18ee26a8_cycling_26.csv", "start_s": 80, "end_s": 85, "reason": "probable stop or non-cycling transition", "propagate_to_pair": true}
+  ],
+  "review_notes": [
+    {
+      "files": ["872f1832_cycling_39.csv", "18ee26a8_cycling_26.csv"],
+      "note": "A strong event near 114 s in the wrist segment and 54 s in the leg segment is synchronized across devices. It is retained as a real bicycle bump, not treated as sensor corruption."
+    },
+    {
+      "files": ["872f1832_walking_24.csv", "18ee26a8_walking_9.csv"],
+      "note": "The leg enclosure was kicked and loosened near 230 s in an earlier test session. These filenames are not present in the final own dataset and therefore cannot enter training."
+    }
+  ]
+}

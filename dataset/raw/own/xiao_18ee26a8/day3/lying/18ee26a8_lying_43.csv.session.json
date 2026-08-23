@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "protocol_version": 6,
+  "device_identity": "95D112A518EE26A8",
+  "file_name": "18ee26a8_lying_43.csv",
+  "size_bytes": 996571,
+  "crc32": "BC692D34",
+  "activity": "lying",
+  "sensor_placement": "leg",
+  "body_side": "left",
+  "session_id": "7461b51d-f69d-43ac-8520-9f027760fb26",
+  "paired_session_id": "0fecbe50-1c30-4346-a594-462019c8d120",
+  "started_at_epoch_ms": 1787474294982
+}

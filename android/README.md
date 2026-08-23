@@ -15,7 +15,7 @@ Implemented in source:
 
 - BLE scan, GATT connection, MTU request, characteristic subscription, command
   writes, control indications, and file notifications
-- v5 `hello` capability check followed by authoritative `status`
+- v6 `hello` capability check followed by authoritative `status`
 - a dedicated `Data` screen for recording and file recovery
 - atomic `record_start` and recoverable `record_stop` transactions with request
   IDs and timeouts
@@ -37,13 +37,15 @@ Implemented in source:
 
 Still pending:
 
-- physical BLE, QSPI, disconnect, power-loss, and throughput acceptance tests
-- a real research dataset, trained classifier, embedded inference, and a real
-  step-counting algorithm
+- destructive physical fault injection for power loss, corrupt transfer data,
+  and exhausted storage
+- a long logger-plus-inference stress test and person-independent classifier
+  evaluation
 - durable product-session history/export beyond the dataset CSV workflow
 
-Live activity, confidence, summary, and step values from the current firmware
-remain placeholders until the later ML milestone.
+Green `18EE26A8` publishes the deployed leg classifier, confidence, summary,
+and validated step-counter values. Blue intentionally publishes `unknown` and
+has no deployed wrist step counter.
 
 ## Project layout
 
@@ -52,7 +54,7 @@ android/app/src/main/
   AndroidManifest.xml
   java/pl/edu/activitytracker/
     app/          dependency container
-    ble/          UUIDs, v5 wire codec, and telemetry parsers
+    ble/          UUIDs, v6 wire codec, and telemetry parsers
     data/         BLE/mock sources, dataset controller, and repository
     domain/       protocol, dataset, activity, route, and calorie models
     gps/          phone location tracker
@@ -102,7 +104,7 @@ result is not an accepted pass.
 ## BLE dataset workflow
 
 1. Open `Data` and choose a writable destination with the system folder picker.
-2. Connect and wait for protocol v5 handshake/status synchronization.
+2. Connect and wait for protocol v6 handshake/status synchronization.
 3. Select `walking`, `running`, `cycling`, `sitting`, or `lying`.
 4. Tap `Start`; one atomic `record_start,<id>,<label>` is sent.
 5. At 1536 KiB, or earlier to preserve the storage reserve, the board finalizes
@@ -121,7 +123,7 @@ blindly repeating a mutating command. A failed or interrupted download leaves
 the contiguous partial available for resume.
 
 The complete wire format, response variants, MTU behavior, and error rules are
-defined in [`../docs/ble_protocol_v5.md`](../docs/ble_protocol_v5.md).
+defined in [`../docs/ble_protocol_v6.md`](../docs/ble_protocol_v6.md).
 
 ## Local file safety
 
@@ -160,6 +162,14 @@ estimate:
 kcal = MET * 3.5 * weight_kg / 200 * minutes
 ```
 
+`Current activity time` is the duration of the uninterrupted activity currently
+reported by the firmware. `Session` is the total duration since the Home session
+was started. Session duration and calorie integration use Android's monotonic
+elapsed-realtime clock, so wall-clock corrections cannot make them jump forward
+or backward. Unit tests advance a virtual clock and cover activity changes,
+stopping the session, all five MET values, and invalid inputs without requiring
+physical movement.
+
 They are independent of dataset recording. The map renders walking, running,
 and cycling as colored route segments and groups stationary sitting/lying
 points. These product-facing features do not yet form a durable session-history
@@ -171,7 +181,7 @@ The app requests nearby-device Bluetooth permissions for BLE. Location is used
 for the map and phone session, and Android 13+ requires notification permission
 for the foreground location service.
 
-Protocol v5 is intentionally unauthenticated for this laboratory prototype.
+Protocol v6 is intentionally unauthenticated for this laboratory prototype.
 Any nearby client that knows the UUIDs can attempt commands; filename and file
 identity guards prevent accidents but are not access control. Pairing/bonding or
 application-layer authorization is a later milestone.

@@ -1,0 +1,2 @@
+raczej czyste dane
+running_27.csv nazywało się walking_27.csv bo źle zaznaczyłem w apce, ale pozmieniałem w obu plikach i mam nadzieję że to nic nie zepsuje

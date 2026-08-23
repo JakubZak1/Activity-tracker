@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "purpose": "embedded_v2_fresh_generalization_holdout",
+  "dataset_root": "dataset/raw/holdout/embedded_v2_fresh_2026-08-23",
+  "subject_id": "S01",
+  "placements": {
+    "18EE26A8": "leg"
+  },
+  "label_corrections": {},
+  "metadata_overrides": {},
+  "excluded_files": {},
+  "excluded_intervals": [],
+  "sessions": {
+    "18ee26a8_sitting_67.csv": "natural sitting with small movements",
+    "18ee26a8_lying_68.csv": "lying on back with small movements",
+    "18ee26a8_walking_69.csv": "deliberately slow walking on a straight corridor route",
+    "18ee26a8_walking_70.csv": "normal-pace walking on the same corridor route",
+    "18ee26a8_walking_71.csv": "normal-pace continuous left-hand circles",
+    "18ee26a8_walking_72.csv": "normal-pace continuous right-hand circles",
+    "18ee26a8_running_73.csv": "deliberately slow jog on the corridor route",
+    "18ee26a8_running_74.csv": "normal comfortable run on the same route",
+    "18ee26a8_cycling_75.csv": "outdoor cycling with phone stored and stationary start/stop"
+  },
+  "notes": [
+    "These nine sessions were recorded only after embedded v2 training, export, software parity, and initial physical runtime validation were complete.",
+    "No file was inspected or used to alter the model before this holdout declaration was created.",
+    "The maneuver descriptions and collection order are frozen in docs/embedded_v2_fresh_test.md.",
+    "No corrections, file exclusions, or interval exclusions are declared before evaluation."
+  ]
+}

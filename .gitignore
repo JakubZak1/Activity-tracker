@@ -15,6 +15,8 @@ dataset/processed/*
 dataset/models/*
 dataset/results/*
 dataset/test/
+dataset/dataset_raw_own_backup/
+dataset/raw_backup_*/
 !dataset/sessions.csv
 !dataset/downloads.csv
 !dataset/raw/**/.gitkeep

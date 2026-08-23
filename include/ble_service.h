@@ -14,6 +14,8 @@ bool takeCommand(char* output, size_t outputSize);
 bool sendControlResponse(const char* response);
 bool hasPendingControlResponse();
 void requestTelemetry();
+void updateActivity(const char* label, uint8_t confidencePercent);
+void updateStepCount(uint32_t steps);
 bool startLogList(uint32_t requestId);
 bool startFileTransfer(uint32_t requestId, const char* name, uint32_t offset);
 void cancelFileOperation();

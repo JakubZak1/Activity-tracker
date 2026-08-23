@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "protocol_version": 6,
+  "device_identity": "95D112A518EE26A8",
+  "file_name": "18ee26a8_running_66.csv",
+  "size_bytes": 83510,
+  "crc32": "4EC9AA96",
+  "activity": "running",
+  "sensor_placement": "leg",
+  "body_side": "left",
+  "session_id": "03e95b76-3116-4bd1-ac57-74c3a104d3d7",
+  "paired_session_id": "507e3f01-fb33-43e7-bfe3-bdb1d0f417fa",
+  "started_at_epoch_ms": 1787499252809
+}
