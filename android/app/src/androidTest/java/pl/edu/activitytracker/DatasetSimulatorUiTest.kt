@@ -1,6 +1,5 @@
 package pl.edu.activitytracker
 
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
@@ -39,7 +38,7 @@ import pl.edu.activitytracker.ui.data.DataCollectionScreen
 @RunWith(AndroidJUnit4::class)
 class DatasetSimulatorUiTest {
     @get:Rule
-    val composeRule = createAndroidComposeRule<ComponentActivity>()
+    val composeRule = createAndroidComposeRule<ComposeTestActivity>()
 
     private val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 

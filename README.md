@@ -136,12 +136,14 @@ Current app features:
 - byte-count and CRC32 verification before `.part` is finalized
 - a full v6 mock device for pause/offload/resume development without the board
 - live activity, confidence, battery, session duration, steps, and calories UI
-- MET-based calorie estimate using user weight
-- phone GPS preview on the map
-- foreground location service for recording sessions while the phone is locked
-- OSMDroid map with route segments colored by activity
+- exact per-class and `unknown` duration aggregation with a frozen session weight
+- MET-based calorie estimate that excludes disconnected/stale telemetry
+- optional phone GPS; denying location does not block a Home session
+- SQLite checkpoints, interrupted-session recovery, unlimited local history, and SAF JSON/route-CSV export
+- foreground connected-device service for Home sessions while the phone is locked
+- live and historical OSMDroid maps with route segments colored by activity
 - grouped stop markers for sitting and lying
-- Settings and Debug screens
+- Home, Map, Data, History and Settings screens; diagnostics are opened from Settings
 - protocol/debug events that make request/response failures visible
 
 Current limitations:
@@ -151,7 +153,7 @@ Current limitations:
 - the cadence-aware Green classifier v2 has passed desktop/export/native tests and a fresh same-participant session test, but not a long-duration logger-plus-inference stress test or person-independent evaluation
 - Blue has no deployed wrist classifier or step counter; the validated Green counter over-counted slow walking by 9.0% and under-counted running by 11.0% on average
 - the current classification results are single-subject, session-grouped estimates and do not establish person-independent generalization
-- completed Home sessions, per-activity duration totals, calories, steps, and routes are not yet persisted in a local history; this remains required for the strict thesis scope
+- the Home history is local-only and has no cross-device synchronization or cloud backup
 
 Open the Android app in Android Studio by selecting:
 
@@ -190,7 +192,10 @@ The simulator verifies Android state management and protocol handling; it does n
 
 In the final system split:
 - firmware classifies activity, measures battery, tracks session duration, and counts steps
-- Android displays activity, estimates calories, collects phone GPS, and visualizes the route
+- Android aggregates trustworthy class times, estimates calories, optionally collects phone GPS, persists sessions, exports results, and visualizes current/historical routes
+- Python curates the dataset, trains and compares RF/SVM, exports the leg model, and evaluates effectiveness
+
+The durable Home-session contract is documented in [docs/home_sessions.md](docs/home_sessions.md).
 
 ## PlatformIO Environments
 
@@ -439,16 +444,17 @@ This is required for stable USB CDC `Serial` support with this board/framework c
 
 The formatter keeps local FATFS sources in `src/fatfs/` because the one-time formatting flow depends on files that are not exposed as normal library headers.
 
-## Roadmap
+## Release and remaining research limitations
 
-Remaining release and thesis stages:
+The engineering release includes durable Home history and export. The final
+release archive is generated with `tools/build_release_archive.ps1`; it contains
+the Git snapshot plus ignored raw data, models, processed features, results,
+APK, firmware binaries, calibration files and a SHA-256 manifest.
 
-1. retain a final read-only checksum backup of the admitted raw dataset
-2. review the current curation intervals and document the measurement protocol in the thesis
-3. complete a longer logger-plus-inference stability run for the cadence-aware leg Random Forest v2 on Green
-4. preserve v2 as the frozen embedded baseline and, if possible, repeat its test on another day or participant
-5. complete durable Android Home-session history with per-activity durations, steps, calories, route visualization, and local export
-6. commit and tag the tested firmware, Android app, ML pipeline, provenance, and documentation as one reproducible release
+Future work remains person-independent evaluation, a deployed wrist model,
+bonded/authenticated BLE, destructive flash/power fault injection, and a longer
+combined logger/inference stress run. These are explicit limitations rather
+than hidden release requirements for this single-participant laboratory scope.
 
 ## License
 

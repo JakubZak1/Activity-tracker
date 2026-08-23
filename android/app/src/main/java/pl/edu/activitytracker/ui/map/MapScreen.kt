@@ -166,6 +166,22 @@ fun MapScreen(
     }
 }
 
+@Composable
+fun HistoricalRouteMap(route: List<RoutePoint>, modifier: Modifier = Modifier) {
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            MapView(context).apply {
+                setTileSource(TileSourceFactory.MAPNIK)
+                setMultiTouchControls(true)
+                controller.setZoom(16.0)
+                route.lastOrNull()?.let { controller.setCenter(GeoPoint(it.latitude, it.longitude)) }
+            }
+        },
+        update = { mapView -> renderRoute(mapView, route, null) },
+    )
+}
+
 private fun renderRoute(
     mapView: MapView,
     route: List<RoutePoint>,

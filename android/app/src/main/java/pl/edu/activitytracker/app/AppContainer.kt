@@ -13,6 +13,8 @@ import pl.edu.activitytracker.session.SessionRecordingController
 import pl.edu.activitytracker.session.DatasetTransferRuntime
 import pl.edu.activitytracker.storage.SettingsStore
 import pl.edu.activitytracker.storage.LogFileStore
+import pl.edu.activitytracker.storage.SQLiteHomeSessionStore
+import pl.edu.activitytracker.storage.SafHomeSessionExporter
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 
@@ -33,6 +35,8 @@ class AppContainer(context: Context) {
     private val locationTracker = AndroidLocationTracker(appContext)
     private val sessionRecordingController = SessionRecordingController(appContext)
     private val logFileStore = LogFileStore(appContext)
+    private val homeSessionStore = SQLiteHomeSessionStore(appContext)
+    private val homeSessionExporter = SafHomeSessionExporter(appContext)
     private val datasetTransferRuntime = DatasetTransferRuntime(appContext)
     private val datasetController = DatasetController(
         deviceDataSource = deviceDataSource,
@@ -73,5 +77,7 @@ class AppContainer(context: Context) {
         locationTracker = locationTracker,
         sessionRecordingController = sessionRecordingController,
         settingsStore = settingsStore,
+        homeSessionStore = homeSessionStore,
+        homeSessionExporter = homeSessionExporter,
     )
 }

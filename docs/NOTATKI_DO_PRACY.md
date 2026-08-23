@@ -583,3 +583,29 @@ należy odróżniać cztery poziomy pewności:
 - `dataset/results/embedded_v2_fresh_holdout_2026-08-23/` — wynik końcowego
   holdoutu v2.
 - `docs/step_counter.md` — algorytm, preflight i protokół walidacji kroków.
+
+## 12. Trwałe sesje Home i końcowe wnioski implementacyjne
+
+- Home używa wyłącznie zapisanego adresu Green `18EE26A8`. Rozdzielenie
+  urządzenia użytkowego od Blue usuwa niedeterministyczny wybór pierwszej
+  reklamy BLE i pozwala powiązać wyniki z właściwą kalibracją oraz modelem.
+- Czas nie jest przepisywany z chwilowej etykiety po rozłączeniu. Interwał jest
+  zaliczany do klasy tylko przy aktywnym BLE i telemetrii nie starszej niż 3 s;
+  pozostały czas trafia do `unknown` i nie nalicza kalorii. Dzięki temu brak
+  danych nie wygląda w historii jak pewna predykcja.
+- Masa użytkownika jest zamrażana przy Start. Zmiana ustawień w trakcie lub po
+  sesji nie zmienia jej historycznych kalorii. `MET_v1` jest zapisywane jawnie,
+  co umożliwia odtworzenie metody obliczeń.
+- GPS jest dodatkiem, a nie warunkiem pomiaru. Odmowa lokalizacji daje poprawną
+  sesję bez punktów trasy oraz eksport CSV zawierający sam nagłówek.
+- Checkpoint SQLite co 5 s ogranicza stratę po zabiciu procesu. Rekord `Active`
+  po ponownym uruchomieniu staje się `Interrupted` dokładnie na ostatnim
+  checkpointcie; system nie dopisuje czasu, którego rzeczywiście nie obserwował.
+- Kopia SQLite jest źródłem prawdy, a SAF jest eksportem. Utrata uprawnienia do
+  folderu nie usuwa historii i może być naprawiona późniejszym Retry.
+- Testy UI początkowo przechodziły dopiero po ręcznym odblokowaniu telefonu.
+  Logcat pokazał, że zwykła aktywność testowa przechodziła natychmiast z
+  `RESUMED` do `PAUSED` przez keyguard. Debugowy host `showWhenLocked` usunął tę
+  zależność i pozwolił przejść 7/7 testów także przy aktywnym lockscreenie. Nie
+  należy jednak mylić tego z walidacją ciągłości prawdziwego BLE w tle — to
+  osobny test usługi pierwszoplanowej.

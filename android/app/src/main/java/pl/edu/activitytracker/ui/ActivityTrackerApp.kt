@@ -1,7 +1,7 @@
 package pl.edu.activitytracker.ui
 
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
@@ -22,6 +22,8 @@ import androidx.navigation.compose.rememberNavController
 import pl.edu.activitytracker.ui.debug.DebugScreen
 import pl.edu.activitytracker.ui.data.MultiDataCollectionScreen
 import pl.edu.activitytracker.ui.home.HomeScreen
+import pl.edu.activitytracker.ui.history.HistoryScreen
+import pl.edu.activitytracker.ui.history.SessionDetailScreen
 import pl.edu.activitytracker.ui.map.MapScreen
 import pl.edu.activitytracker.ui.settings.SettingsScreen
 
@@ -34,7 +36,7 @@ private enum class Destination(
     Map("map", "Map", Icons.Default.Map),
     Data("data", "Data", Icons.Default.Storage),
     Settings("settings", "Settings", Icons.Default.Settings),
-    Debug("debug", "Debug", Icons.Default.BugReport),
+    History("history", "History", Icons.Default.History),
 }
 
 @Composable
@@ -78,6 +80,11 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onDisconnect = viewModel::disconnectDevice,
                     onStartSession = viewModel::startSession,
                     onStopSession = viewModel::stopSession,
+                    onRetrySave = viewModel::retrySessionSave,
+                    onOpenSavedSession = { sessionId ->
+                        viewModel.loadSession(sessionId)
+                        navController.navigate("history/$sessionId")
+                    },
                 )
             }
             composable(Destination.Map.route) {
@@ -107,6 +114,28 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onFolderSelected = viewModel::setDataFolderUri,
                 )
             }
+            composable(Destination.History.route) {
+                HistoryScreen(
+                    paddingValues = paddingValues,
+                    sessions = state.history,
+                    onOpen = { sessionId ->
+                        viewModel.loadSession(sessionId)
+                        navController.navigate("history/$sessionId")
+                    },
+                )
+            }
+            composable("history/{sessionId}") {
+                SessionDetailScreen(
+                    paddingValues = paddingValues,
+                    session = state.selectedSession,
+                    onBack = { viewModel.clearSelectedSession(); navController.popBackStack() },
+                    onRetryExport = viewModel::retrySessionExport,
+                    onDelete = { sessionId ->
+                        viewModel.deleteSession(sessionId)
+                        navController.popBackStack()
+                    },
+                )
+            }
             composable(Destination.Settings.route) {
                 SettingsScreen(
                     paddingValues = paddingValues,
@@ -116,9 +145,10 @@ fun ActivityTrackerApp(viewModel: MainViewModel) {
                     onUseMockChanged = viewModel::setUseMockSource,
                     onResetSession = viewModel::resetSession,
                     onConnect = viewModel::connectDevice,
+                    onOpenDiagnostics = { navController.navigate("debug") },
                 )
             }
-            composable(Destination.Debug.route) {
+            composable("debug") {
                 DebugScreen(
                     paddingValues = paddingValues,
                     state = state,

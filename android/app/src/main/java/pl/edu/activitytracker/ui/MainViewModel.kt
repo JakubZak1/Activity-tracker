@@ -38,6 +38,16 @@ class MainViewModel(
 
     fun stopSession() = repository.stopSession()
 
+    fun retrySessionSave() = repository.retrySessionSave()
+
+    fun loadSession(sessionId: String) = repository.loadSession(sessionId)
+
+    fun clearSelectedSession() = repository.clearSelectedSession()
+
+    fun retrySessionExport(sessionId: String) = repository.retrySessionExport(sessionId)
+
+    fun deleteSession(sessionId: String) = repository.deleteSession(sessionId)
+
     fun resetSession() = repository.resetSession()
 
     fun requestStatus() = repository.requestStatus()

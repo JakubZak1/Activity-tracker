@@ -511,16 +511,24 @@ class DatasetControllerTest {
         )
         runCurrent()
 
+        repository.connect()
+        runCurrent()
         device.emitActivity(ActivityType.Walking)
         runCurrent()
         repository.startSession()
-        advanceTimeBy(10_000L)
-        runCurrent()
+        repeat(5) {
+            advanceTimeBy(2_000L)
+            device.emitActivity(ActivityType.Walking, testScheduler.currentTime)
+            runCurrent()
+        }
 
         device.emitActivity(ActivityType.Running)
         runCurrent()
-        advanceTimeBy(20_000L)
-        runCurrent()
+        repeat(10) {
+            advanceTimeBy(2_000L)
+            device.emitActivity(ActivityType.Running, testScheduler.currentTime)
+            runCurrent()
+        }
 
         val expected = CalorieCalculator.caloriesFor(ActivityType.Walking, 70.0, 10.0 / 60.0) +
             CalorieCalculator.caloriesFor(ActivityType.Running, 70.0, 20.0 / 60.0)
@@ -556,6 +564,7 @@ class DatasetControllerTest {
         repository.connect()
         runCurrent()
         assertEquals(1, device.connectCalls)
+        assertEquals("configured-green", device.connectIds.first())
 
         device.dropUnexpectedly()
         runCurrent()
@@ -572,6 +581,69 @@ class DatasetControllerTest {
         advanceTimeBy(60_000L)
         runCurrent()
         assertEquals(2, device.connectCalls)
+    }
+
+    @Test
+    fun staleTelemetryAndDisconnectAreCountedAsUnknown() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = controller(device, MemoryFileStore(), backgroundScope, dispatcher),
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+        repository.connect()
+        runCurrent()
+        device.emitActivity(ActivityType.Walking)
+        runCurrent()
+        repository.startSession()
+        advanceTimeBy(3_000L)
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+        repository.disconnect()
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+
+        assertEquals(3_000L, repository.state.value.activityDurations.walkingMillis)
+        assertEquals(4_000L, repository.state.value.activityDurations.unknownMillis)
+        assertEquals(7_000L, repository.state.value.activityDurations.totalMillis)
+    }
+
+    @Test
+    fun sessionWeightIsFrozenUntilStop() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val settings = FakeSettingsStore()
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = controller(device, MemoryFileStore(), backgroundScope, dispatcher),
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = settings,
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+        repository.connect()
+        runCurrent()
+        device.emitActivity(ActivityType.Sitting)
+        runCurrent()
+        repository.startSession()
+        settings.settings.value = settings.settings.value.copy(weightKg = 140.0)
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+
+        assertEquals(70.0, repository.state.value.sessionWeightKg!!, 0.0)
+        val expected = CalorieCalculator.caloriesFor(ActivityType.Sitting, 70.0, 2.0 / 60.0)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
     }
 
     private fun controller(
@@ -663,12 +735,12 @@ class DatasetControllerTest {
             )
         }
 
-        fun emitActivity(type: ActivityType) {
+        fun emitActivity(type: ActivityType, timestampMillis: Long = 0L) {
             _activity.value = ActivityReading(
                 type = type,
                 confidencePercent = 100,
                 durationSeconds = 0L,
-                timestampMillis = 0L,
+                timestampMillis = timestampMillis,
             )
         }
 
@@ -752,7 +824,7 @@ class DatasetControllerTest {
     private class FakePhoneSessionController : PhoneSessionController {
         var starts = 0
         var stops = 0
-        override fun startIfLocationAllowed() { starts += 1 }
+        override fun start() { starts += 1 }
         override fun stop() { stops += 1 }
     }
 
@@ -764,7 +836,7 @@ class DatasetControllerTest {
     }
 
     private class FakeSettingsStore : SettingsDataSource {
-        override val settings = MutableStateFlow(SettingsUiState())
+        override val settings = MutableStateFlow(SettingsUiState(greenDeviceAddress = "configured-green"))
         override suspend fun setDataFolderUri(uri: String) {
             settings.value = settings.value.copy(dataFolderUri = uri)
         }

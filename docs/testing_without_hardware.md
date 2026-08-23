@@ -105,6 +105,9 @@ The JVM suite should cover at least:
 - byte-count and CRC32 success/failure paths;
 - repository/controller behavior for start, stop, disconnect, reconnect, continuous segmented offload, CRC gating, and automatic guarded deletion;
 - existing payload and calorie calculations.
+- exact six-bucket Home timing, stale/disconnected unknown time, frozen session
+  mass, Green address selection, final Stop tick and optional GPS behavior;
+- SQLite checkpoint/recovery/delete and JSON/header-only route CSV contracts.
 
 The debug APK is generated under `android/app/build/outputs/apk/debug/`. A successful compile alone is not a BLE or emulator result.
 
@@ -154,7 +157,15 @@ if (-not (Test-Path '.\app\src\androidTest')) {
 Pop-Location
 ```
 
-At minimum, the smoke test should launch `MainActivity`, navigate with the mock source enabled, and prove that the `Data` workflow can reach its recording and completed-download states without crashing.
+The debug build supplies `ComposeTestActivity`, a test-only host with
+`showWhenLocked` and `turnScreenOn`. This prevents a device keyguard from
+pausing the Compose host and producing a false "No compose hierarchies" error.
+It is excluded from release builds and does not replace a real foreground BLE
+screen-lock acceptance test.
+
+At minimum, the suite must prove the one-device and paired-device simulator
+flows, SQLite checkpoint/interrupted recovery, export serialization, and the
+History/detail/no-GPS workflow. A Gradle `NO-SOURCE` result is not a pass.
 
 ## 6. Manual v6 simulator scenario
 

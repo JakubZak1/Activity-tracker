@@ -29,7 +29,14 @@ Implemented in source:
   without the board
 - automatic reconnect attempts after 1, 2, 4, 8, and 15 seconds
 - a separate phone-side Home session for GPS, duration, and calorie estimation
-- map preview, foreground location service, Settings, and raw Debug events
+- six exact duration buckets (five classes plus unknown), a frozen session mass,
+  stale-telemetry gating, and deterministic MET_v1 calories
+- SQLite transaction checkpoints every 5 seconds, interrupted-session recovery,
+  History/detail screens, shared live/historical maps, and safe manual deletion
+- automatic SAF JSON and route-CSV export through `.part`, sync and rename
+- optional GPS and a foreground connected-device service; denied location does
+  not block time, steps or calories
+- map preview, Settings, and diagnostics opened from Settings
 - JVM tests for payload/protocol parsing, controller behavior, CRC transfer
   decisions, calories, and Home/dataset separation
 - an API 35 emulator test covering start, disconnect/reconnect, stop, automatic
@@ -41,7 +48,7 @@ Still pending:
   and exhausted storage
 - a long logger-plus-inference stress test and person-independent classifier
   evaluation
-- durable product-session history/export beyond the dataset CSV workflow
+- person-independent validation and destructive physical fault injection
 
 Green `18EE26A8` publishes the deployed leg classifier, confidence, summary,
 and validated step-counter values. Blue intentionally publishes `unknown` and
@@ -60,7 +67,7 @@ android/app/src/main/
     gps/          phone location tracker
     permissions/  runtime permission helpers
     session/      phone foreground location service
-    storage/      DataStore settings and SAF `.part`/CRC file storage
+    storage/      DataStore settings, SQLite sessions, SAF exports and dataset storage
     ui/           Compose screens and navigation
 android/app/src/test/
   JVM protocol and controller tests
@@ -155,31 +162,32 @@ QSPI flash, IMU timing, or power-loss behavior.
 
 ## Home, map, and calories
 
-Home sessions track phone GPS, duration, and an approximate MET-based calorie
-estimate:
+Home sessions track optional phone GPS, six duration buckets, steps, and an
+approximate MET-based calorie estimate:
 
 ```text
 kcal = MET * 3.5 * weight_kg / 200 * minutes
 ```
 
-`Current activity time` is the duration of the uninterrupted activity currently
-reported by the firmware. `Session` is the total duration since the Home session
-was started. Session duration and calorie integration use Android's monotonic
-elapsed-realtime clock, so wall-clock corrections cannot make them jump forward
-or backward. Unit tests advance a virtual clock and cover activity changes,
-stopping the session, all five MET values, and invalid inputs without requiring
-physical movement.
+`Current activity time` is the uninterrupted firmware value. Home's total is
+the exact sum of walking, running, cycling, sitting, lying and unknown
+milliseconds measured with a monotonic clock. A recognized class is used only
+while connected and with telemetry no older than 3 seconds; all other time is
+unknown and adds no calories. The mass is frozen at Start.
 
-They are independent of dataset recording. The map renders walking, running,
-and cycling as colored route segments and groups stationary sitting/lying
-points. These product-facing features do not yet form a durable session-history
-or thesis dataset pipeline.
+They are independent of dataset recording. Every 5 seconds the session and new
+route points are transactionally checkpointed in SQLite. Stop performs a final
+tick, persists Completed, and exports JSON plus route CSV to `home_sessions` in
+the selected SAF folder. Active records found after process death become
+Interrupted at their last checkpoint. See
+[`../docs/home_sessions.md`](../docs/home_sessions.md).
 
 ## Permissions and security
 
-The app requests nearby-device Bluetooth permissions for BLE. Location is used
-for the map and phone session, and Android 13+ requires notification permission
-for the foreground location service.
+The app requests nearby-device Bluetooth permissions for BLE. Location and
+Android 13+ notification permission are optional for Home: denial results in a
+session without GPS, while BLE activity, duration, steps, calories and local
+history continue.
 
 Protocol v6 is intentionally unauthenticated for this laboratory prototype.
 Any nearby client that knows the UUIDs can attempt commands; filename and file
