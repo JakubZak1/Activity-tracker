@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "dataset_root": "dataset/raw/holdout",
+  "subject_id": "S01",
+  "purpose": "Frozen post-training holdout; never use for fitting or model selection.",
+  "placements": {
+    "18EE26A8": "leg",
+    "872F1832": "wrist"
+  },
+  "label_corrections": {},
+  "metadata_overrides": {},
+  "excluded_files": {},
+  "excluded_intervals": [],
+  "review_notes": []
+}

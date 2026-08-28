@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "protocol_version": 6,
+  "device_identity": "95D112A518EE26A8",
+  "file_name": "18ee26a8_sitting_47.csv",
+  "size_bytes": 1047940,
+  "crc32": "569594BD",
+  "activity": "sitting",
+  "sensor_placement": "leg",
+  "body_side": "left",
+  "session_id": "f3a67ba5-af57-4147-802c-3e20a7c0794d",
+  "paired_session_id": "b142d8f3-e99b-4d3c-9b61-7476ee3106ea",
+  "started_at_epoch_ms": 1787476550047
+}

@@ -110,11 +110,25 @@ void testParserAndRequestIdBoundaries() {
 
   result = protocol_v3::parseCommand("delete,4,running_9.csv,123,89abcdef", command);
   expect(!result.ok && strcmp(result.errorCode, "invalid_crc32") == 0, "lowercase CRC is rejected");
+
+  result = protocol_v3::parseCommand("identify,5,blue,5000", command);
+  expect(result.ok && command.type == protocol_v3::CommandType::Identify,
+         "blue identify command parses");
+  TEST_ASSERT_EQUAL_STRING("blue", command.color);
+  TEST_ASSERT_EQUAL_UINT32(5000, command.durationMs);
+
+  result = protocol_v3::parseCommand("identify,6,red,5000", command);
+  expect(!result.ok && strcmp(result.errorCode, "invalid_color") == 0,
+         "red is reserved for faults");
+  result = protocol_v3::parseCommand("identify,7,green,499", command);
+  expect(!result.ok && strcmp(result.errorCode, "invalid_duration") == 0,
+         "identify duration is bounded");
 }
 
 void testManagedNames() {
   TEST_ASSERT_TRUE(protocol_v3::isManagedLogName("walking_0.csv"));
   TEST_ASSERT_TRUE(protocol_v3::isManagedLogName("fast_walking_123.csv"));
+  TEST_ASSERT_TRUE(protocol_v3::isManagedLogName("7c91a2f4_walking_123.csv"));
   TEST_ASSERT_TRUE(protocol_v3::isManagedLogName("lying_4294967295.csv"));
   TEST_ASSERT_FALSE(protocol_v3::isManagedLogName("../walking_0.csv"));
   TEST_ASSERT_FALSE(protocol_v3::isManagedLogName("walking/0.csv"));

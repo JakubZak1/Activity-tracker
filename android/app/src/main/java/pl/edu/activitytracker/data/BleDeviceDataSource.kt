@@ -18,6 +18,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.core.content.ContextCompat
 import java.util.ArrayDeque
 import java.util.UUID
@@ -224,7 +225,9 @@ class BleDeviceDataSource(
             val device = result.device
             val advertisedName = result.scanRecord?.deviceName ?: device.name.orEmpty()
             val matchesId = requestedDeviceId == null || device.address.equals(requestedDeviceId, true)
-            val matchesName = advertisedName.isBlank() || advertisedName.equals(expectedDeviceName, true)
+            val matchesName = advertisedName.isBlank() ||
+                advertisedName.equals(expectedDeviceName, true) ||
+                advertisedName.startsWith("$expectedDeviceName-", true)
             if (matchesId && matchesName && isActiveScan(token)) {
                 stopScan()
                 if (connectionDesired) connectGatt(device)
@@ -742,10 +745,24 @@ class BleDeviceDataSource(
     }
 
     private fun emitRaw(source: String, payload: String, timestamp: Long = System.currentTimeMillis()) {
+        if (source in LOGGED_RAW_SOURCES || source.endsWith("error")) {
+            Log.d(LOG_TAG, "identity=${_deviceIdentity.value ?: "none"},generation=$activeGeneration,$source,$payload")
+        }
         _rawEvents.tryEmit(RawDeviceEvent(source, payload, timestamp))
     }
 
     companion object {
+        private const val LOG_TAG = "ActivityTrackerBle"
+        private val LOGGED_RAW_SOURCES = setOf(
+            "connection",
+            "scan",
+            "mtu",
+            "gatt_cache",
+            "command",
+            "command_retry",
+            "control_response",
+            "protocol_error",
+        )
         private const val DEFAULT_DEVICE_NAME = "ActivityTracker"
         private const val SCAN_TIMEOUT_MS = 12_000L
         private const val DEFAULT_MTU = 23

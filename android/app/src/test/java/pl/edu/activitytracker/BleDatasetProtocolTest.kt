@@ -20,10 +20,11 @@ class BleDatasetProtocolTest {
     @Test
     fun parsesHelloAndAllStatusVariants() {
         val hello = BleDatasetProtocol.parseControlLine(
-            "ok,7,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard",
+            "ok,7,hello,6,11111111A1B2C3D4,A1B2C3D4,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard;stable_device_id;rgb_identify;unique_filenames",
         ) as DeviceControlResponse.Hello
         assertEquals(7L, hello.requestId)
-        assertEquals(5, hello.protocolVersion)
+        assertEquals(6, hello.protocolVersion)
+        assertEquals("11111111A1B2C3D4", hello.deviceIdentity)
         assertTrue("crc32" in hello.capabilities)
         assertTrue("imu_drdy104_mean2_52_deadline_guard" in hello.capabilities)
 
@@ -89,7 +90,7 @@ class BleDatasetProtocolTest {
     @Test
     fun reassemblesFragmentedAndCoalescedControlRecords() {
         val assembler = ControlRecordAssembler()
-        val input = "ok,1,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard\nstatus,2,idle,none,0,none,100\n"
+        val input = "ok,1,hello,6,11111111A1B2C3D4,A1B2C3D4,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard;stable_device_id;rgb_identify;unique_filenames\nstatus,2,idle,none,0,none,100\n"
             .toByteArray()
         val records = mutableListOf<String>()
         input.forEach { byte -> records += assembler.append(byteArrayOf(byte)) }

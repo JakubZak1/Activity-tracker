@@ -44,7 +44,7 @@ def load_log(path: Path) -> list[SensorSample]:
 
 def load_directory(raw_dir: Path) -> list[SensorSample]:
     samples: list[SensorSample] = []
-    for path in sorted(raw_dir.glob("*.csv")):
+    for path in sorted(raw_dir.rglob("*.csv")):
         samples.extend(load_log(path))
     return samples
 

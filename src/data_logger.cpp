@@ -163,13 +163,14 @@ bool candidateExists(const char* logicalName) {
          (makeRelatedPath(logicalName, kCrcTemporarySuffix, related, sizeof(related)) && fatfs.exists(related));
 }
 
-bool chooseSessionName(const char* label) {
+bool chooseSessionName(const char* label, const char* devicePrefix) {
   uint32_t index = readSessionIndex();
   while (true) {
     const int written = snprintf(
         currentLogNameBuffer,
         sizeof(currentLogNameBuffer),
-        "%s_%lu.csv",
+        "%s_%s_%lu.csv",
+        devicePrefix,
         label,
         static_cast<unsigned long>(index));
     if (written <= 0 || written >= static_cast<int>(sizeof(currentLogNameBuffer))) {
@@ -371,9 +372,10 @@ bool begin() {
   return true;
 }
 
-bool startSession(const char* label) {
+bool startSession(const char* label, const char* devicePrefix) {
   clearError();
-  if (!protocol_v3::isValidLabel(label)) {
+  if (!protocol_v3::isValidLabel(label) || !devicePrefix ||
+      strlen(devicePrefix) != 8) {
     setError("invalid_label");
     return false;
   }
@@ -381,7 +383,7 @@ bool startSession(const char* label) {
     setError("already_recording");
     return false;
   }
-  if (!chooseSessionName(label)) {
+  if (!chooseSessionName(label, devicePrefix)) {
     return false;
   }
   if (!logFile.open(currentPartPathBuffer, O_RDWR | O_CREAT | O_TRUNC)) {

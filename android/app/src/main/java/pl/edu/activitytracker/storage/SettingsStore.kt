@@ -16,6 +16,8 @@ data class SettingsUiState(
     val deviceName: String = SettingsStore.DEFAULT_DEVICE_NAME,
     val useMockSource: Boolean = false,
     val dataFolderUri: String? = null,
+    val blueDeviceAddress: String? = null,
+    val greenDeviceAddress: String? = null,
 )
 
 interface SettingsDataSource {
@@ -23,13 +25,19 @@ interface SettingsDataSource {
     suspend fun setDataFolderUri(uri: String)
 }
 
-class SettingsStore(private val context: Context) : SettingsDataSource {
+interface DatasetDeviceSettings : SettingsDataSource {
+    suspend fun setDatasetDeviceAddress(slot: String, address: String?)
+}
+
+class SettingsStore(private val context: Context) : DatasetDeviceSettings {
     override val settings: Flow<SettingsUiState> = context.activityTrackerDataStore.data.map { preferences ->
         SettingsUiState(
             weightKg = preferences[Keys.WEIGHT_KG] ?: DEFAULT_WEIGHT_KG,
             deviceName = preferences[Keys.DEVICE_NAME] ?: DEFAULT_DEVICE_NAME,
             useMockSource = preferences[Keys.USE_MOCK_SOURCE] ?: false,
             dataFolderUri = preferences[Keys.DATA_FOLDER_URI],
+            blueDeviceAddress = preferences[Keys.BLUE_DEVICE_ADDRESS],
+            greenDeviceAddress = preferences[Keys.GREEN_DEVICE_ADDRESS],
         )
     }
 
@@ -60,11 +68,20 @@ class SettingsStore(private val context: Context) : SettingsDataSource {
         }
     }
 
+    override suspend fun setDatasetDeviceAddress(slot: String, address: String?) {
+        context.activityTrackerDataStore.edit { preferences ->
+            val key = if (slot == "blue") Keys.BLUE_DEVICE_ADDRESS else Keys.GREEN_DEVICE_ADDRESS
+            if (address == null) preferences.remove(key) else preferences[key] = address
+        }
+    }
+
     private object Keys {
         val WEIGHT_KG = doublePreferencesKey("weight_kg")
         val DEVICE_NAME = stringPreferencesKey("device_name")
         val USE_MOCK_SOURCE = booleanPreferencesKey("use_mock_source")
         val DATA_FOLDER_URI = stringPreferencesKey("data_folder_uri")
+        val BLUE_DEVICE_ADDRESS = stringPreferencesKey("blue_device_address")
+        val GREEN_DEVICE_ADDRESS = stringPreferencesKey("green_device_address")
     }
 
     companion object {

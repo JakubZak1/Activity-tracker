@@ -19,6 +19,7 @@ enum class CommandType : uint8_t {
   Download,
   Cancel,
   Delete,
+  Identify,
 };
 
 struct Command {
@@ -29,6 +30,8 @@ struct Command {
   uint32_t offset;
   uint32_t sizeBytes;
   uint32_t crc32;
+  char color[6];
+  uint32_t durationMs;
 };
 
 struct ParseResult {

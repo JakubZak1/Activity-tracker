@@ -1,13 +1,14 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "device": {
     "alias": "xiao_unit_01",
     "board": "Seeed Studio XIAO nRF52840 Sense",
-    "usb_serial": "7F1F9F0D872F1832"
+    "hardware_id": "7F1F9F0D872F1832",
+    "short_id": "872F1832"
   },
-  "captured_on": "2026-08-19",
+  "captured_on": "2026-08-21",
   "acquisition": {
-    "protocol_version": 5,
+    "protocol_version": 6,
     "capability": "imu_drdy104_mean2_52_deadline_guard",
     "input_rate_hz": 104,
     "output_rate_hz": 52,
@@ -16,88 +17,198 @@
   },
   "method": {
     "type": "six_position_static",
-    "trim_seconds_at_start": 5,
-    "trim_seconds_at_end": 5,
-    "raw_directory": "calibration/raw/xiao_unit_01/2026-08-19",
+    "trim_seconds_at_start": 5.0,
+    "trim_seconds_at_end": 5.0,
+    "raw_directory": "calibration/raw/xiao_unit_01/2026-08-21",
+    "orientation_detection": "largest absolute trimmed acceleration mean",
     "correction_order": "corrected_acc=(raw_acc-offset_g)*scale_multiplier; corrected_gyro=raw_gyro-bias_dps"
   },
   "orientations": [
     {
-      "file": "sitting_2.csv",
-      "position": "face_1",
-      "bytes": 199816,
-      "rows": 3329,
-      "duration_s": 64.0,
-      "crc32": "9EEB9B3D",
-      "sha256": "5DCDA094903E0663DA3B99253C80E2DA89449F756392BA43716B0EBC973569CB"
+      "file": "872f1832_sitting_15.csv",
+      "fixture_position": "large_face_a",
+      "detected_orientation": "+z",
+      "bytes": 196576,
+      "rows": 3275,
+      "trimmed_rows": 2755,
+      "duration_s": 62.961,
+      "effective_hz": 52.00044471974714,
+      "crc32": "3C1F2702",
+      "sha256": "28ED451C60FB5A7404E0013DE54DFBF314168E83ECDEC7672174F091FDEF74C2",
+      "paired_session_id": "278204fc-eacf-43e8-99a6-d8ad135a865f",
+      "accel_mean_g": [
+        0.025869981851179672,
+        0.01126257713248639,
+        1.0207664972776769
+      ],
+      "gyro_mean_dps": [
+        0.5599364791288566,
+        -2.758520871143376,
+        0.763431941923775
+      ]
     },
     {
-      "file": "sitting_3.csv",
-      "position": "face_1_opposite",
-      "bytes": 197536,
-      "rows": 3291,
-      "duration_s": 63.269,
-      "crc32": "4D7D2395",
-      "sha256": "E821953955C82175B3C0E10EF933F61AD7321BAAB582BD58D55E7001DF0E0C2A"
+      "file": "872f1832_sitting_16.csv",
+      "fixture_position": "large_face_b",
+      "detected_orientation": "-z",
+      "bytes": 206716,
+      "rows": 3280,
+      "trimmed_rows": 2760,
+      "duration_s": 63.057,
+      "effective_hz": 52.00057091203197,
+      "crc32": "D9194F0D",
+      "sha256": "0B825FA35806B1622EFD3743E620AFB714572FBD63CEA735C4D1A72EA77F2270",
+      "paired_session_id": "ad574cf4-c56d-4974-b50a-1f57da6a7e7d",
+      "accel_mean_g": [
+        -0.053342210144927536,
+        -0.009164202898550725,
+        -1.0040259782608696
+      ],
+      "gyro_mean_dps": [
+        0.5605199275362319,
+        -2.7588115942028986,
+        0.7626068840579711
+      ]
     },
     {
-      "file": "sitting_4.csv",
-      "position": "usb_up",
-      "bytes": 203932,
-      "rows": 3288,
-      "duration_s": 63.211,
-      "crc32": "5FB7EC43",
-      "sha256": "D72253DA7EA655696D069D6296B7B79264EE151BC087005C304A905EEE3B2C15"
+      "file": "872f1832_sitting_17.csv",
+      "fixture_position": "usb_down",
+      "detected_orientation": "+x",
+      "bytes": 201387,
+      "rows": 3247,
+      "trimmed_rows": 2727,
+      "duration_s": 62.423,
+      "effective_hz": 52.00006407894526,
+      "crc32": "4D14183D",
+      "sha256": "1E0E5C7194AE0F1FB44D7746847C1900E03970BAACCB258051AB1A1A3BD84E5C",
+      "paired_session_id": "9ef6da6a-64c0-4bb6-83c8-1ed4abf8ba87",
+      "accel_mean_g": [
+        1.0016838650531719,
+        -0.0029413641364136414,
+        -0.028750495049504946
+      ],
+      "gyro_mean_dps": [
+        0.5567015034836817,
+        -2.7613164649798314,
+        0.7675999266593325
+      ]
     },
     {
-      "file": "sitting_5.csv",
-      "position": "usb_down",
-      "bytes": 194068,
-      "rows": 3288,
-      "duration_s": 63.211,
-      "crc32": "1400AE5F",
-      "sha256": "4063EEE065528179856306358045B6C4A210F144BB66A11546B844C2D8BCCD57"
+      "file": "872f1832_sitting_18.csv",
+      "fixture_position": "usb_up",
+      "detected_orientation": "-x",
+      "bytes": 199241,
+      "rows": 3265,
+      "trimmed_rows": 2745,
+      "duration_s": 62.769,
+      "effective_hz": 52.00019117717345,
+      "crc32": "FE090676",
+      "sha256": "6C94AE77CAC6A6F329BABF0307D2683BC8A6D98987545E787478C525A6DAEE22",
+      "paired_session_id": "93cf70c9-407d-4443-8b17-98113dd3f033",
+      "accel_mean_g": [
+        -1.0084280510018213,
+        0.005429326047358835,
+        0.046517887067395264
+      ],
+      "gyro_mean_dps": [
+        0.5498506375227687,
+        -2.7457340619307833,
+        0.7668378870673953
+      ]
     },
     {
-      "file": "sitting_6.csv",
-      "position": "side_1",
-      "bytes": 199576,
-      "rows": 3325,
-      "duration_s": 63.923,
-      "crc32": "FD5F1B2F",
-      "sha256": "DCF9F9E2F22A7B359DFDCFBA7386812F2329698F632DF3D0ECBDE1C4BD49B542"
+      "file": "872f1832_sitting_19.csv",
+      "fixture_position": "usb_right",
+      "detected_orientation": "+y",
+      "bytes": 195982,
+      "rows": 3265,
+      "trimmed_rows": 2745,
+      "duration_s": 62.769,
+      "effective_hz": 52.00019117717345,
+      "crc32": "61C95025",
+      "sha256": "E4F4842D835BE46BF4AB0817BD647279425F8A786E6A5AEC7F1BEF9C44A58D83",
+      "paired_session_id": "495999c7-0406-434c-a6c8-2d0784830c5f",
+      "accel_mean_g": [
+        0.001425063752276867,
+        1.0010611657559199,
+        0.009605209471766848
+      ],
+      "gyro_mean_dps": [
+        0.5565573770491804,
+        -2.749214936247723,
+        0.7677176684881604
+      ]
     },
     {
-      "file": "sitting_7.csv",
-      "position": "side_1_opposite",
-      "bytes": 199996,
-      "rows": 3332,
-      "duration_s": 64.057,
-      "crc32": "9BA055A8",
-      "sha256": "50C333E7794120B0F5A67191BE5787D14C6900FBDF38E7BE7E510DDC887EC021"
+      "file": "872f1832_sitting_20.csv",
+      "fixture_position": "usb_left",
+      "detected_orientation": "-y",
+      "bytes": 202258,
+      "rows": 3261,
+      "trimmed_rows": 2741,
+      "duration_s": 62.692,
+      "effective_hz": 52.00025521597652,
+      "crc32": "5BA4F2D3",
+      "sha256": "0EAE187DDFD1CC6B48FFAE81B6EE26EAA21ABD45E9ECDE095001F7870B5E5B79",
+      "paired_session_id": "5359567b-5273-4136-bb27-2514f254178b",
+      "accel_mean_g": [
+        -0.009142429770156876,
+        -0.9983272528274352,
+        0.03061904414447282
+      ],
+      "gyro_mean_dps": [
+        0.5555435972272893,
+        -2.755844582269245,
+        0.7684421743889093
+      ]
     }
   ],
   "accelerometer": {
-    "axis_order": ["x", "y", "z"],
-    "offset_g": [-0.0042992594, 0.0007926550, 0.0070584101],
-    "scale_multiplier": [0.9941095597, 1.0006084618, 0.9877269299],
-    "raw_norm_mean_g": 1.0062155766,
-    "raw_norm_stddev_g": 0.0072082220,
-    "corrected_norm_mean_g": 1.0002470035,
-    "corrected_norm_stddev_g": 0.0005676157,
-    "corrected_norm_min_g": 0.9975615292,
-    "corrected_norm_max_g": 1.0025312563
+    "axis_order": [
+      "x",
+      "y",
+      "z"
+    ],
+    "offset_g": [
+      -0.003372092974324725,
+      0.0013669564642423415,
+      0.008370259508403644
+    ],
+    "scale_multiplier": [
+      0.9949694760902476,
+      1.0003058842448824,
+      0.9877555473767986
+    ],
+    "raw_norm_mean_g": 1.006382065698234,
+    "raw_norm_stddev_g": 0.007464210298638657,
+    "corrected_norm_mean_g": 1.0005728522660056,
+    "corrected_norm_stddev_g": 0.0006774220385684085,
+    "corrected_norm_min_g": 0.9979328546991862,
+    "corrected_norm_max_g": 1.0033041202182713
   },
   "gyroscope": {
-    "axis_order": ["x", "y", "z"],
-    "bias_dps": [0.4952877547, -2.7270172713, 0.8011157593],
-    "bias_between_orientation_stddev_dps": [0.0092975998, 0.0042932031, 0.0081931665]
+    "axis_order": [
+      "x",
+      "y",
+      "z"
+    ],
+    "bias_dps": [
+      0.5565240089843988,
+      -2.7549056031081163,
+      0.7660990712074304
+    ],
+    "bias_between_orientation_stddev_dps": [
+      0.003491414002483046,
+      0.005579853715342213,
+      0.0022441427675165253
+    ]
   },
   "status": "engineering_calibration_candidate",
   "notes": [
     "Raw calibration CSV files are not activity-class dataset sessions.",
-    "The logger continues to store raw physical units; apply this exact correction in both model training and embedded inference preprocessing.",
-    "Repeat calibration for every physical XIAO unit and after changing the IMU range, ODR, averaging, enclosure, or mounting of the board inside the enclosure.",
-    "Temperature was not controlled or recorded, so temperature-dependent bias remains uncharacterized."
+    "Apply this exact correction in both model training and embedded inference preprocessing.",
+    "Repeat after changing IMU range, ODR, averaging, enclosure, or board mounting.",
+    "Temperature was not controlled, so temperature-dependent bias remains uncharacterized.",
+    "Validate the profile on a stationary oblique holdout after rigidly fixing the board in its final enclosure."
   ]
 }

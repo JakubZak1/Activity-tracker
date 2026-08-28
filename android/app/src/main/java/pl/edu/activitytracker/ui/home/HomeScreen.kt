@@ -44,15 +44,15 @@ fun HomeScreen(
     onDisconnect: () -> Unit,
     onStartSession: () -> Unit,
     onStopSession: () -> Unit,
+    onRetrySave: () -> Unit,
+    onOpenSavedSession: (String) -> Unit,
 ) {
     val context = LocalContext.current
     val isConnected = state.connectionState is ConnectionState.Connected
     val battery = state.battery
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        if (grants.values.all { it }) onStartSession()
-    }
+    ) { onStartSession() }
     val bluetoothPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->
@@ -122,6 +122,9 @@ fun HomeScreen(
                         }
                     }
                 }
+                state.homeConfigurationMessage?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error)
+                }
             }
         }
 
@@ -135,15 +138,47 @@ fun HomeScreen(
                 listOf(
                     Metric("Current activity", state.currentActivity.type.displayName),
                     Metric("Confidence", "${state.currentActivity.confidencePercent}%"),
-                    Metric("Activity time", formatDuration(state.currentActivity.durationSeconds)),
+                    Metric("Current activity time", formatDuration(state.currentActivity.durationSeconds)),
                     Metric("Battery", battery?.let { "${it.percent}%" } ?: "--"),
                     Metric("Voltage", battery?.let { "${it.voltageMv} mV" } ?: "--"),
                     Metric("Session", formatDuration(state.sessionDurationSeconds)),
                     Metric("Calories (est.)", String.format(Locale.US, "%.1f kcal", state.caloriesKcal)),
-                    Metric("Steps", "${state.summary?.steps ?: 0}"),
+                    Metric("Steps", "${state.sessionSteps}"),
                 ),
             ) { metric ->
                 MetricCard(metric)
+            }
+        }
+
+        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Activity time", style = MaterialTheme.typography.titleMedium)
+                listOf(
+                    "Walking" to state.activityDurations.walkingMillis,
+                    "Running" to state.activityDurations.runningMillis,
+                    "Cycling" to state.activityDurations.cyclingMillis,
+                    "Sitting" to state.activityDurations.sittingMillis,
+                    "Lying" to state.activityDurations.lyingMillis,
+                    "Unknown" to state.activityDurations.unknownMillis,
+                ).forEach { (label, millis) ->
+                    Text("$label: ${formatDuration(millis / 1_000L)}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        state.sessionSaveError?.let { error ->
+            ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Session save failed: $error", color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onRetrySave) { Text("Retry save") }
+                }
+            }
+        }
+
+        state.lastSavedSessionId?.takeIf { !state.isSessionRunning }?.let { savedId ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Session saved.", color = MaterialTheme.colorScheme.primary)
+                OutlinedButton(onClick = { onOpenSavedSession(savedId) }) { Text("View details") }
             }
         }
 

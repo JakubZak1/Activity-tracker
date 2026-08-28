@@ -6,14 +6,17 @@
 #include <string.h>
 
 #include "activity_state.h"
+#include "activity_classifier.h"
 #include "app_config.h"
 #include "battery_reader.h"
 #include "ble_service.h"
 #include "crc32.h"
 #include "data_logger.h"
+#include "device_identity.h"
 #include "imu_reader.h"
 #include "protocol_v3.h"
 #include "serial_console.h"
+#include "step_counter.h"
 
 namespace {
 enum class ResponseTransport : uint8_t {
@@ -34,17 +37,67 @@ bool hasPendingOffload = false;
 char pendingOffloadLabel[app_config::kActivityLabelBufferSize] = {0};
 uint32_t cachedFreeBytes = 0;
 uint32_t recordingFreeBytesAtStart = 0;
+bool samplingRuntimeActive = false;
+uint32_t nextIdleInferenceRetryMs = 0;
+uint8_t inferredClass = 255;
+uint8_t inferredConfidence = 0;
+uint8_t candidateClass = 255;
+uint8_t candidateCount = 0;
 
-void setLed(bool on) {
-  digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
+enum class DeviceLedColor : uint8_t {
+  Blue,
+  Green,
+};
+
+DeviceLedColor deviceLedColor = DeviceLedColor::Blue;
+uint32_t identifyUntilMs = 0;
+uint32_t identifyNextToggleMs = 0;
+bool identifyLedOn = false;
+
+void setRgbOff() {
+  digitalWrite(LED_RED, HIGH);
+  digitalWrite(LED_GREEN, HIGH);
+  digitalWrite(LED_BLUE, HIGH);
 }
 
-void blinkFatalPattern(uint32_t onMs, uint32_t offMs) {
+void setRgb(DeviceLedColor color, bool on) {
+  setRgbOff();
+  if (!on) return;
+  digitalWrite(color == DeviceLedColor::Blue ? LED_BLUE : LED_GREEN, LOW);
+}
+
+void setLed(bool on) {
+  if (identifyUntilMs != 0) return;
+  setRgb(deviceLedColor, on);
+}
+
+void blinkFatalPattern(const char* message, uint32_t onMs, uint32_t offMs) {
   while (true) {
-    setLed(true);
+    if (Serial) {
+      Serial.println(message);
+    }
+    setRgbOff();
+    digitalWrite(LED_RED, LOW);
     delay(onMs);
-    setLed(false);
+    setRgbOff();
     delay(offMs);
+  }
+}
+
+void serviceIdentifyLed() {
+  if (identifyUntilMs == 0) return;
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - identifyUntilMs) >= 0) {
+    identifyUntilMs = 0;
+    identifyNextToggleMs = 0;
+    identifyLedOn = false;
+    setRgbOff();
+    return;
+  }
+  if (identifyNextToggleMs == 0 || static_cast<int32_t>(now - identifyNextToggleMs) >= 0) {
+    identifyLedOn = !identifyLedOn;
+    setRgb(deviceLedColor, identifyLedOn);
+    identifyNextToggleMs = now + 180;
   }
 }
 
@@ -56,10 +109,7 @@ void waitForSerial(uint32_t timeoutMs) {
 }
 
 void handleFatalError(const char* message) {
-  if (Serial) {
-    Serial.println(message);
-  }
-  blinkFatalPattern(120, 880);
+  blinkFatalPattern(message, 120, 880);
 }
 
 void printCaptureStats(Stream& serial) {
@@ -76,8 +126,63 @@ void printCaptureStats(Stream& serial) {
   serial.println(capture.deadlineMisses);
 }
 
+void resetInferencePrediction() {
+  activity_classifier::reset();
+  inferredClass = 255;
+  inferredConfidence = 0;
+  candidateClass = 255;
+  candidateCount = 0;
+  ble_service::updateActivity("unknown", 0);
+}
+
+void handleInferencePrediction(
+    const activity_classifier::Prediction& prediction,
+    uint32_t computationUs) {
+  if (inferredClass == 255) {
+    inferredClass = prediction.classIndex;
+    inferredConfidence = prediction.confidencePercent;
+  } else if (prediction.classIndex == inferredClass) {
+    inferredConfidence = prediction.confidencePercent;
+    candidateClass = 255;
+    candidateCount = 0;
+  } else if (prediction.classIndex == candidateClass) {
+    if (candidateCount < 255) ++candidateCount;
+    if (candidateCount >= 2) {
+      inferredClass = prediction.classIndex;
+      inferredConfidence = prediction.confidencePercent;
+      candidateClass = 255;
+      candidateCount = 0;
+    }
+  } else {
+    candidateClass = prediction.classIndex;
+    candidateCount = 1;
+  }
+  ble_service::updateActivity(activity_classifier::label(inferredClass), inferredConfidence);
+  if (Serial) {
+    Serial.print("info,inference,raw=");
+    Serial.print(activity_classifier::label(prediction.classIndex));
+    Serial.print(",published=");
+    Serial.print(activity_classifier::label(inferredClass));
+    Serial.print(",confidence=");
+    Serial.print(inferredConfidence);
+    Serial.print(",compute_us=");
+    Serial.println(computationUs);
+  }
+}
+
+void stopSamplingRuntime() {
+  step_counter::endCapture();
+  ble_service::updateStepCount(step_counter::totalSteps());
+  imu_reader::stopCapture();
+  samplingRuntimeActive = false;
+}
+
 bool startSamplingRuntime(bool newRecording) {
   const uint32_t now = millis();
+  if (samplingRuntimeActive) {
+    step_counter::endCapture();
+    ble_service::updateStepCount(step_counter::totalSteps());
+  }
   if (newRecording) {
     sampleId = 0;
     recordingStartedAtMs = now;
@@ -86,7 +191,20 @@ bool startSamplingRuntime(bool newRecording) {
     faultBleWasConnected = false;
   }
   setLed(false);
-  return imu_reader::startCapture(now);
+  resetInferencePrediction();
+  step_counter::beginCapture();
+  samplingRuntimeActive = imu_reader::startCapture(now);
+  if (!samplingRuntimeActive) step_counter::endCapture();
+  return samplingRuntimeActive;
+}
+
+bool startIdleInferenceRuntime() {
+  if (!activity_classifier::enabled()) return true;
+  const bool started = startSamplingRuntime(false);
+  if (!started) {
+    nextIdleInferenceRetryMs = millis() + 2000;
+  }
+  return started;
 }
 
 void copyFault(const char* error) {
@@ -94,7 +212,7 @@ void copyFault(const char* error) {
   // paths may update their own last-error buffers.
   strncpy(recordingFault, error ? error : "recording_failed", sizeof(recordingFault) - 1);
   recordingFault[sizeof(recordingFault) - 1] = '\0';
-  imu_reader::stopCapture();
+  stopSamplingRuntime();
   if (data_logger::isLogging()) {
     data_logger::abortSession();
   }
@@ -102,12 +220,19 @@ void copyFault(const char* error) {
   bleFaultReported = false;
   faultBleWasConnected = ble_service::isConnected();
   recordingMachine.fail();
-  setLed(false);
+  identifyUntilMs = 0;
+  setRgbOff();
 }
 
 bool sendResponse(ResponseTransport transport, Stream* serial, const char* response) {
   if (transport == ResponseTransport::Ble) {
-    return ble_service::sendControlResponse(response);
+    const bool queued = ble_service::sendControlResponse(response);
+    if (Serial) {
+      Serial.print("info,ble_control_response,");
+      Serial.print(queued ? "queued," : "failed,");
+      Serial.println(response ? response : "none");
+    }
+    return queued;
   }
   if (serial) {
     serial->println(response);
@@ -142,12 +267,37 @@ bool refreshCachedFreeBytes() {
 }
 
 void sendHello(ResponseTransport transport, Stream* serial, uint32_t requestId) {
-  char response[192] = {0};
+  char response[app_config::kBleControlResponseBufferSize] = {0};
   snprintf(
       response,
       sizeof(response),
-      "ok,%lu,hello,5,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard",
-      static_cast<unsigned long>(requestId));
+      "ok,%lu,hello,6,%s,%s,recording;catalog;download;resume;crc32;segmentation;auto_offload;pause_offload;imu_drdy104_mean2_52_deadline_guard;stable_device_id;rgb_identify;unique_filenames",
+      static_cast<unsigned long>(requestId),
+      device_identity::fullId(),
+      device_identity::shortId());
+  sendResponse(transport, serial, response);
+}
+
+void handleIdentify(
+    ResponseTransport transport,
+    Stream* serial,
+    const protocol_v3::Command& command) {
+  deviceLedColor = strcmp(command.color, "green") == 0
+                       ? DeviceLedColor::Green
+                       : DeviceLedColor::Blue;
+  const uint32_t now = millis();
+  identifyUntilMs = now + command.durationMs;
+  identifyNextToggleMs = 0;
+  identifyLedOn = false;
+  serviceIdentifyLed();
+  char response[96] = {0};
+  snprintf(
+      response,
+      sizeof(response),
+      "ok,%lu,identified,%s,%lu",
+      static_cast<unsigned long>(command.requestId),
+      command.color,
+      static_cast<unsigned long>(command.durationMs));
   sendResponse(transport, serial, response);
 }
 
@@ -276,7 +426,7 @@ void handleRecordStart(
     sendError(transport, serial, command.requestId, "storage_critical");
     return;
   }
-  if (!data_logger::startSession(command.label)) {
+  if (!data_logger::startSession(command.label, device_identity::filePrefix())) {
     copyFault(data_logger::lastError());
     sendError(transport, serial, command.requestId, recordingFault);
     return;
@@ -366,7 +516,7 @@ void handleRecordStop(
     return;
   }
 
-  imu_reader::stopCapture();
+  stopSamplingRuntime();
   if (Serial) {
     printCaptureStats(Serial);
   }
@@ -381,6 +531,7 @@ void handleRecordStop(
     sendError(transport, serial, command.requestId, recordingFault);
     return;
   }
+  startIdleInferenceRuntime();
   setLed(false);
   char crcText[9] = {0};
   crc32::format(info.crc32, crcText);
@@ -492,7 +643,7 @@ void handleDelete(
       resumeError = data_logger::lastError();
     } else if (cachedFreeBytes <= app_config::kCriticalFreeBytes) {
       resumeError = "storage_critical";
-    } else if (!data_logger::startSession(pendingOffloadLabel)) {
+    } else if (!data_logger::startSession(pendingOffloadLabel, device_identity::filePrefix())) {
       resumeError = data_logger::lastError();
     } else if (!recordingMachine.resumeAfterOffload()) {
       resumeError = "recording_resume_failed";
@@ -528,6 +679,7 @@ void dispatchCommand(
   if (recordingMachine.state() == activity_state::RecordingState::Recording &&
       command.type != protocol_v3::CommandType::Hello &&
       command.type != protocol_v3::CommandType::Status &&
+      command.type != protocol_v3::CommandType::Identify &&
       command.type != protocol_v3::CommandType::RecordStart &&
       command.type != protocol_v3::CommandType::RecordStop) {
     sendError(transport, serial, command.requestId, "busy_recording");
@@ -575,6 +727,9 @@ void dispatchCommand(
     case protocol_v3::CommandType::Delete:
       handleDelete(transport, serial, command);
       break;
+    case protocol_v3::CommandType::Identify:
+      handleIdentify(transport, serial, command);
+      break;
     case protocol_v3::CommandType::Invalid:
       sendError(transport, serial, command.requestId, "invalid_command");
       break;
@@ -594,14 +749,19 @@ void parseAndDispatch(ResponseTransport transport, Stream* serial, const char* l
 void serviceBleCommands() {
   char command[app_config::kBleCommandBufferSize] = {0};
   if (ble_service::takeCommand(command, sizeof(command))) {
+    if (Serial) {
+      Serial.print("info,ble_command,");
+      Serial.println(command);
+    }
     parseAndDispatch(ResponseTransport::Ble, nullptr, command);
   }
 }
 
 void printHelp(Stream& serial) {
-  serial.println("BLE protocol v5 commands are also accepted over serial:");
+  serial.println("BLE protocol v6 commands are also accepted over serial:");
   serial.println("hello,<id> | status,<id> | record_start,<id>,<label> | record_stop,<id>");
   serial.println("list,<id> | delete,<id>,<name>,<size>,<CRC32> | cancel,<id>");
+  serial.println("identify,<id>,<blue|green>,<500..10000 ms>");
   serial.println("diagnostics: help | stream on | stream off");
 }
 
@@ -661,8 +821,12 @@ void reportRecordingFaultIfNeeded() {
 
 namespace app {
 void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  setLed(false);
+  pinMode(LED_RED, OUTPUT);
+  pinMode(LED_GREEN, OUTPUT);
+  pinMode(LED_BLUE, OUTPUT);
+  setRgbOff();
+  device_identity::begin();
+  deviceLedColor = device_identity::prefersBlue() ? DeviceLedColor::Blue : DeviceLedColor::Green;
   recordingMachine.reset();
   recordingFault[0] = '\0';
 
@@ -673,36 +837,54 @@ void setup() {
     handleFatalError("error,imu_init_failed");
   }
   if (!data_logger::begin()) {
-    handleFatalError("error,storage_mount_failed");
+    handleFatalError(data_logger::lastError());
   }
 
-  const bool bleReady = ble_service::begin();
+  const bool bleReady = ble_service::begin(device_identity::bleName());
+  const bool classifierEnabled = activity_classifier::begin(device_identity::shortId());
+  step_counter::begin(classifierEnabled);
   sampleId = 0;
   recordingStartedAtMs = millis();
   refreshCachedFreeBytes();
+  if (activity_classifier::enabled() && !startIdleInferenceRuntime()) {
+    handleFatalError("error,inference_capture_failed");
+  }
   if (Serial) {
     Serial.print("info,imu_config,address=0x");
     Serial.print(imu_reader::activeAddress(), HEX);
     Serial.println(",input_hz=104,output_hz=52,source=data_ready,filter=pair_mean,deadline_guard_us=22000,storage=preallocated,accel_range_g=16,gyro_range_dps=2000");
     if (bleReady) {
       Serial.print("info,ble_advertising,");
-      Serial.println(app_config::kBleDeviceName);
+      Serial.println(device_identity::bleName());
+      Serial.print("info,device_identity,");
+      Serial.print(device_identity::fullId());
+      Serial.print(',');
+      Serial.println(device_identity::filePrefix());
     } else {
       Serial.println("warn,ble_init_failed");
     }
     Serial.println("info,recording,idle");
+    Serial.print("info,inference,");
+    Serial.println(activity_classifier::enabled() ? "leg_rf_v2" : "disabled_for_device");
     printHelp(Serial);
   }
 }
 
 void loop() {
+  serviceIdentifyLed();
   if (Serial) {
     serial_console::service(Serial, handleSerialCommand);
   }
   ble_service::service();
   serviceBleCommands();
 
-  if (recordingMachine.state() != activity_state::RecordingState::Recording) {
+  if (!samplingRuntimeActive && activity_classifier::enabled() &&
+      recordingMachine.state() != activity_state::RecordingState::Fault &&
+      static_cast<int32_t>(millis() - nextIdleInferenceRetryMs) >= 0) {
+    startIdleInferenceRuntime();
+  }
+
+  if (!samplingRuntimeActive) {
     reportRecordingFaultIfNeeded();
     delay(10);
     return;
@@ -714,11 +896,36 @@ void loop() {
     return;
   }
   if (readResult != imu_reader::ReadResult::Sample) {
-    copyFault(imu_reader::lastError());
+    if (recordingMachine.state() == activity_state::RecordingState::Recording) {
+      copyFault(imu_reader::lastError());
+    } else {
+      if (Serial) {
+        Serial.print("warn,inference_capture,");
+        Serial.println(imu_reader::lastError());
+      }
+      stopSamplingRuntime();
+      resetInferencePrediction();
+      nextIdleInferenceRetryMs = millis() + 2000;
+    }
     reportRecordingFaultIfNeeded();
     return;
   }
   ++sampleId;
+  step_counter::push(sample);
+  if (activity_classifier::enabled()) {
+    activity_classifier::Prediction prediction = {};
+    const uint32_t inferenceStartedAtUs = micros();
+    if (activity_classifier::push(sample, prediction)) {
+      const char* rawLabel = activity_classifier::label(prediction.classIndex);
+      const bool stepActivity = strcmp(rawLabel, "walking") == 0 || strcmp(rawLabel, "running") == 0;
+      step_counter::classifyWindow(sample.timestampMs, stepActivity);
+      ble_service::updateStepCount(step_counter::totalSteps());
+      handleInferencePrediction(prediction, micros() - inferenceStartedAtUs);
+    }
+  }
+  if (recordingMachine.state() != activity_state::RecordingState::Recording) {
+    return;
+  }
   if (!data_logger::writeSample(sample, data_logger::currentLabel(), serialStreaming, Serial)) {
     copyFault(data_logger::lastError());
     reportRecordingFaultIfNeeded();
@@ -742,7 +949,7 @@ void loop() {
           : 0;
   if (activity_state::shouldRotateSegment(currentBytes, app_config::kSegmentMaxBytes) ||
       activity_state::shouldRotateSegment(currentBytes, safeBytesForSegment)) {
-    imu_reader::stopCapture();
+    stopSamplingRuntime();
     if (Serial) {
       printCaptureStats(Serial);
     }
@@ -763,6 +970,7 @@ void loop() {
       reportRecordingFaultIfNeeded();
       return;
     }
+    startIdleInferenceRuntime();
     pendingOffload = completed;
     hasPendingOffload = true;
     if (!refreshCachedFreeBytes()) {

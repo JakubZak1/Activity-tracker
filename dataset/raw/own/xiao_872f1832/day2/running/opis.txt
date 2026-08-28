@@ -1,0 +1,2 @@
+dosc czyste dane ale running_36 jest jakies krotkie wiec nie wiem co z nimi. w running_34 nie ma .session z jakiegoś powodu
+running_40.csv się nazywało walking_40.csv bo źle wklikałem w aplikacji przed biegiem, ale pozmieniałem dane w obu plikach żeby pasowało

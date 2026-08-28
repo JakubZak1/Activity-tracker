@@ -45,6 +45,7 @@ fun SettingsScreen(
     onUseMockChanged: (Boolean) -> Unit,
     onResetSession: () -> Unit,
     onConnect: () -> Unit,
+    onOpenDiagnostics: () -> Unit,
 ) {
     val context = LocalContext.current
     var weightText by remember { mutableStateOf(settings.weightKg.toString()) }
@@ -150,5 +151,6 @@ fun SettingsScreen(
             Icon(Icons.Default.Delete, contentDescription = null)
             Text("Reset session")
         }
+        OutlinedButton(onClick = onOpenDiagnostics) { Text("Open diagnostics") }
     }
 }

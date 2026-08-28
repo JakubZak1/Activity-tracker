@@ -30,6 +30,7 @@ import pl.edu.activitytracker.domain.ActivityReading
 import pl.edu.activitytracker.domain.ActivityType
 import pl.edu.activitytracker.domain.BatteryReading
 import pl.edu.activitytracker.domain.BodySide
+import pl.edu.activitytracker.domain.CalorieCalculator
 import pl.edu.activitytracker.domain.CatalogState
 import pl.edu.activitytracker.domain.CollectionState
 import pl.edu.activitytracker.domain.ConnectionState
@@ -69,6 +70,8 @@ class DatasetControllerTest {
                     DeviceControlResponse.Hello(
                         command.requestId,
                         DATASET_PROTOCOL_VERSION - 1,
+                        TEST_DEVICE_ID,
+                        TEST_SHORT_ID,
                         REQUIRED_DATASET_CAPABILITIES,
                     ),
                 )
@@ -96,6 +99,8 @@ class DatasetControllerTest {
                     DeviceControlResponse.Hello(
                         command.requestId,
                         DATASET_PROTOCOL_VERSION,
+                        TEST_DEVICE_ID,
+                        TEST_SHORT_ID,
                         REQUIRED_DATASET_CAPABILITIES - "imu_drdy104_mean2_52_deadline_guard",
                     ),
                 )
@@ -121,7 +126,7 @@ class DatasetControllerTest {
         device.handler = { command ->
             when (command) {
                 is DeviceCommand.Hello -> respond(
-                    DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
+                    testHello(command.requestId),
                 )
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(null, 1000)))
                 is DeviceCommand.ListLogs -> respond(DeviceControlResponse.ListEnd(command.requestId, 0))
@@ -163,7 +168,7 @@ class DatasetControllerTest {
         device.handler = { command ->
             when (command) {
                 is DeviceCommand.Hello -> respond(
-                    DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
+                    testHello(command.requestId),
                 )
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, boardStatus))
                 is DeviceCommand.ListLogs -> respond(DeviceControlResponse.ListEnd(command.requestId, 0))
@@ -270,7 +275,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(testHello(command.requestId))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -317,7 +322,7 @@ class DatasetControllerTest {
         var deleteCount = 0
         device.handler = { command ->
             when (command) {
-                is DeviceCommand.Hello -> respond(DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES))
+                is DeviceCommand.Hello -> respond(testHello(command.requestId))
                 is DeviceCommand.Status -> respond(DeviceControlResponse.Status(command.requestId, DeviceStatus.Idle(identity, 1000)))
                 is DeviceCommand.ListLogs -> {
                     respond(DeviceControlResponse.FileEntry(command.requestId, file))
@@ -438,6 +443,7 @@ class DatasetControllerTest {
             sessionRecordingController = phoneSession,
             settingsStore = FakeSettingsStore(),
             scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
         )
         runCurrent()
 
@@ -451,6 +457,89 @@ class DatasetControllerTest {
         assertEquals(2, phoneSession.stops)
         assertEquals(1, location.starts)
         assertEquals(2, location.stops)
+    }
+
+    @Test
+    fun phoneSessionUsesDeviceStepDeltasAndSurvivesCounterReset() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val dataset = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = dataset,
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+
+        device.emitSummary(100)
+        runCurrent()
+        repository.startSession()
+        device.emitSummary(104)
+        device.emitSummary(109)
+        runCurrent()
+        assertEquals(9, repository.state.value.sessionSteps)
+
+        repository.stopSession()
+        device.emitSummary(115)
+        runCurrent()
+        assertEquals(9, repository.state.value.sessionSteps)
+
+        repository.startSession()
+        device.emitSummary(118)
+        device.emitSummary(2) // Device reboot: the new counter starts again at zero.
+        runCurrent()
+        assertEquals(5, repository.state.value.sessionSteps)
+    }
+
+    @Test
+    fun phoneSessionUsesMonotonicDurationAndIntegratesCaloriesByActivity() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val dataset = controller(device, MemoryFileStore(), backgroundScope, dispatcher)
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = dataset,
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+
+        repository.connect()
+        runCurrent()
+        device.emitActivity(ActivityType.Walking)
+        runCurrent()
+        repository.startSession()
+        repeat(5) {
+            advanceTimeBy(2_000L)
+            device.emitActivity(ActivityType.Walking, testScheduler.currentTime)
+            runCurrent()
+        }
+
+        device.emitActivity(ActivityType.Running)
+        runCurrent()
+        repeat(10) {
+            advanceTimeBy(2_000L)
+            device.emitActivity(ActivityType.Running, testScheduler.currentTime)
+            runCurrent()
+        }
+
+        val expected = CalorieCalculator.caloriesFor(ActivityType.Walking, 70.0, 10.0 / 60.0) +
+            CalorieCalculator.caloriesFor(ActivityType.Running, 70.0, 20.0 / 60.0)
+        assertEquals(30L, repository.state.value.sessionDurationSeconds)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
+
+        repository.stopSession()
+        advanceTimeBy(5_000L)
+        runCurrent()
+        assertEquals(30L, repository.state.value.sessionDurationSeconds)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
     }
 
     @Test
@@ -475,6 +564,7 @@ class DatasetControllerTest {
         repository.connect()
         runCurrent()
         assertEquals(1, device.connectCalls)
+        assertEquals("configured-green", device.connectIds.first())
 
         device.dropUnexpectedly()
         runCurrent()
@@ -491,6 +581,69 @@ class DatasetControllerTest {
         advanceTimeBy(60_000L)
         runCurrent()
         assertEquals(2, device.connectCalls)
+    }
+
+    @Test
+    fun staleTelemetryAndDisconnectAreCountedAsUnknown() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = controller(device, MemoryFileStore(), backgroundScope, dispatcher),
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = FakeSettingsStore(),
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+        repository.connect()
+        runCurrent()
+        device.emitActivity(ActivityType.Walking)
+        runCurrent()
+        repository.startSession()
+        advanceTimeBy(3_000L)
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+        repository.disconnect()
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+
+        assertEquals(3_000L, repository.state.value.activityDurations.walkingMillis)
+        assertEquals(4_000L, repository.state.value.activityDurations.unknownMillis)
+        assertEquals(7_000L, repository.state.value.activityDurations.totalMillis)
+    }
+
+    @Test
+    fun sessionWeightIsFrozenUntilStop() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val device = FakeDeviceDataSource()
+        val settings = FakeSettingsStore()
+        val repository = ActivityTrackerRepository(
+            deviceDataSource = device,
+            datasetController = controller(device, MemoryFileStore(), backgroundScope, dispatcher),
+            locationTracker = FakeLocationTracker(),
+            sessionRecordingController = FakePhoneSessionController(),
+            settingsStore = settings,
+            scope = backgroundScope,
+            elapsedRealtimeMillis = { testScheduler.currentTime },
+        )
+        runCurrent()
+        repository.connect()
+        runCurrent()
+        device.emitActivity(ActivityType.Sitting)
+        runCurrent()
+        repository.startSession()
+        settings.settings.value = settings.settings.value.copy(weightKg = 140.0)
+        runCurrent()
+        advanceTimeBy(2_000L)
+        runCurrent()
+
+        assertEquals(70.0, repository.state.value.sessionWeightKg!!, 0.0)
+        val expected = CalorieCalculator.caloriesFor(ActivityType.Sitting, 70.0, 2.0 / 60.0)
+        assertEquals(expected, repository.state.value.caloriesKcal, 0.000001)
     }
 
     private fun controller(
@@ -516,9 +669,11 @@ class DatasetControllerTest {
         override val connectionGeneration: StateFlow<Long> = _generation.asStateFlow()
         private val _identity = MutableStateFlow<String?>(null)
         override val deviceIdentity: StateFlow<String?> = _identity.asStateFlow()
-        override val activity: Flow<ActivityReading> = emptyFlow()
+        private val _activity = MutableStateFlow(ActivityReading.unknown(0L))
+        override val activity: Flow<ActivityReading> = _activity
         override val battery: Flow<BatteryReading> = emptyFlow()
-        override val summary: Flow<SummaryReading> = emptyFlow()
+        private val _summary = MutableSharedFlow<SummaryReading>(replay = 1, extraBufferCapacity = 8)
+        override val summary: Flow<SummaryReading> = _summary
         override val rawEvents: Flow<RawDeviceEvent> = emptyFlow()
         private val events = Channel<DeviceProtocolEvent>(64)
         override val protocolEvents = events.receiveAsFlow()
@@ -569,6 +724,26 @@ class DatasetControllerTest {
             _connection.value = ConnectionState.Disconnected
         }
 
+        suspend fun emitSummary(steps: Int) {
+            _summary.emit(
+                SummaryReading(
+                    sessionDurationSeconds = 0L,
+                    currentActivity = ActivityType.Walking,
+                    steps = steps,
+                    timestampMillis = 0L,
+                ),
+            )
+        }
+
+        fun emitActivity(type: ActivityType, timestampMillis: Long = 0L) {
+            _activity.value = ActivityReading(
+                type = type,
+                confidencePercent = 100,
+                durationSeconds = 0L,
+                timestampMillis = timestampMillis,
+            )
+        }
+
         fun installIdleProtocolHandler() {
             handler = { command ->
                 when (command) {
@@ -576,6 +751,8 @@ class DatasetControllerTest {
                         DeviceControlResponse.Hello(
                             command.requestId,
                             DATASET_PROTOCOL_VERSION,
+                            TEST_DEVICE_ID,
+                            TEST_SHORT_ID,
                             REQUIRED_DATASET_CAPABILITIES,
                         ),
                     )
@@ -626,7 +803,11 @@ class DatasetControllerTest {
             }
         }
 
-        override fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean = file in verified
+        override fun isVerified(
+            treeUri: String,
+            deviceIdentity: String,
+            file: RemoteFileIdentity,
+        ): Boolean = file in verified
 
         override fun isFolderAvailable(treeUri: String): Boolean = folderAvailable
     }
@@ -643,7 +824,7 @@ class DatasetControllerTest {
     private class FakePhoneSessionController : PhoneSessionController {
         var starts = 0
         var stops = 0
-        override fun startIfLocationAllowed() { starts += 1 }
+        override fun start() { starts += 1 }
         override fun stop() { stops += 1 }
     }
 
@@ -655,13 +836,24 @@ class DatasetControllerTest {
     }
 
     private class FakeSettingsStore : SettingsDataSource {
-        override val settings = MutableStateFlow(SettingsUiState())
+        override val settings = MutableStateFlow(SettingsUiState(greenDeviceAddress = "configured-green"))
         override suspend fun setDataFolderUri(uri: String) {
             settings.value = settings.value.copy(dataFolderUri = uri)
         }
     }
 
     companion object {
+        private const val TEST_DEVICE_ID = "11111111A1B2C3D4"
+        private const val TEST_SHORT_ID = "A1B2C3D4"
+
+        private fun testHello(requestId: Long) = DeviceControlResponse.Hello(
+            requestId,
+            DATASET_PROTOCOL_VERSION,
+            TEST_DEVICE_ID,
+            TEST_SHORT_ID,
+            REQUIRED_DATASET_CAPABILITIES,
+        )
+
         private fun crc32(bytes: ByteArray): String {
             val crc = CRC32().apply { update(bytes) }
             return String.format(Locale.US, "%08X", crc.value)

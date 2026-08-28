@@ -2,19 +2,20 @@
 
 Activity Tracker is an embedded motion-tracking project for the Seeed Studio XIAO nRF52840 Sense. The current milestone is a reliable BLE-controlled workflow for recording labeled IMU sessions, storing them in QSPI flash, and downloading verified CSV files to an Android phone.
 
-The repository contains firmware, an Android/Kotlin app, Python data utilities, and software-only test paths. BLE dataset protocol v5 is the current source-compatible pair: the firmware and Android app must be upgraded together.
+The repository contains firmware, an Android/Kotlin app, a two-placement five-class research dataset workflow, Python ML utilities, and software-only test paths. BLE dataset protocol v6 is the current source-compatible pair: the firmware and Android app must be upgraded together.
 
 Current project status:
 
-- BLE v5 continuous segmented recording, pause-for-offload, resumable transfer, CRC32 verification, and guarded automatic deletion are implemented in source.
+- BLE v6 adds stable per-board IDs, RGB identification, collision-free filenames, and simultaneous wrist/leg collection to the v5 loss-safe segmented recording workflow.
 - The Android `Data` screen is the primary interface for selecting an activity, starting and stopping recording, and recovering CSV files.
-- A v5 mock device simulates segmentation and the dataset workflow when the board is unavailable.
+- A v6 mock device simulates segmentation and the dataset workflow when the board is unavailable.
 - A one-hour locked-screen v5 run completed six pause/offload/CRC/delete/resume cycles and a final Stop/offload. A later long FIFO test exposed word-pattern desynchronization, so those FIFO recordings are diagnostic only. The replacement acquisition runs complete 104 Hz output-register reads in a dedicated high-priority task, averages adjacent pairs to 52 Hz, preallocates each QSPI segment, and stops rather than accepting a raw-frame gap above 22 ms. Its first 30.634 s stationary hardware run produced 1594 valid rows at 52.001 Hz with a maximum raw-frame interval of 9.766 ms; longer and dynamic validation remains pending.
-- There is currently no research dataset. Existing CSV files, if present locally, are smoke-test recordings only.
-- A six-position engineering calibration candidate for `xiao_unit_01` is
-  archived under `calibration/`; these raw files are explicitly excluded from
-  activity training data.
-- There is no trained ML model, no activity-classification inference on the device, and no real step-counting algorithm. Live activity and summary telemetry remain placeholders.
+- A single-subject research dataset has been collected simultaneously from the left wrist and left leg for `walking`, `running`, `cycling`, `sitting`, and `lying`. Raw CSV files remain local and ignored by Git; their immutable curation rules are tracked under `dataset/curation/`.
+- Separate six-position engineering calibration profiles for both boards are archived under `calibration/` and applied during feature preparation. Calibration fixtures are excluded from activity training data.
+- The offline pipeline compares Random Forest and RBF SVM with paired-session grouped cross-validation. Current out-of-fold results and limitations are documented in [docs/ml_pipeline.md](docs/ml_pipeline.md).
+- A compact leg Random Forest is implemented for Green `18EE26A8`. The cadence-aware v2 model has passed software parity, upload, an initial runtime check, and a nine-session fresh same-participant holdout (macro F1 `0.979`, 9/9 correct session majorities). Its classifier-gated lower-leg step counter has also been checked in eight manually counted 100-step trials: mean absolute error was 3.33% for normal walking, 9.0% for slow walking, and 11.0% for running, with no false steps during 14 combined minutes of sitting, lying, and cycling.
+- Thesis-relevant failures, design decisions, limitations, and follow-up tests are maintained in [docs/NOTATKI_DO_PRACY.md](docs/NOTATKI_DO_PRACY.md).
+- The final engineering checklist and reproducible verification matrix are in [docs/PROJECT_COMPLETION.md](docs/PROJECT_COMPLETION.md).
 
 ## Hardware
 
@@ -42,11 +43,12 @@ Normal firmware environment:
 - records one of five labels: `walking`, `running`, `cycling`, `sitting`, or `lying`
 - writes an active session to a temporary file and exposes only finalized CSV files as complete logs
 - keeps recording if the BLE connection is lost; reconnecting clients reconcile state with `status`
-- provides BLE v5 status, recording, paused-offload, catalog, resumable download, cancel, and guarded delete operations
+- provides BLE v6 status, recording, paused-offload, catalog, resumable download, cancel, and guarded delete operations
 - closes the active CSV at 1536 KiB (or before the reserve is exhausted), pauses for verified offload, and resumes the same label only after guarded deletion
 - calculates IEEE CRC-32 for finalized CSV bytes
 - reports approximate LiPo battery voltage and percentage
-- publishes placeholder activity/summary telemetry until ML inference and step counting exist
+- publishes live activity/confidence telemetry from the calibrated leg model on Green; Blue reports `unknown` because it has no deployed wrist model
+- detects lower-leg gyroscope peaks and commits them as steps only for classifier windows identified as walking or running
 - retains serial maintenance commands for development and recovery
 
 Formatter environment:
@@ -73,14 +75,14 @@ Key source modules:
 - `serial_console.cpp` serial command parsing
 - `formatter_main.cpp` one-time external flash formatter
 
-## BLE Dataset Protocol v5
+## BLE Dataset Protocol v6
 
-The authoritative wire contract is [docs/ble_protocol_v5.md](docs/ble_protocol_v5.md). Protocol v5 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
+The authoritative wire contract is [docs/ble_protocol_v6.md](docs/ble_protocol_v6.md). Protocol v6 is not wire-compatible with earlier prototypes. Firmware and Android must use the same version.
 
 The board advertises as:
 
 ```text
-ActivityTracker
+ActivityTracker-XXXXXXXX
 ```
 
 Service UUID:
@@ -105,7 +107,7 @@ Every command and response carries a request ID. Text control records end with `
 ### Phone-controlled recording workflow
 
 1. In Android, open `Data` and choose a destination folder using the system folder picker.
-2. Connect to the board and wait for the v5 `hello` capability check and `status` reconciliation.
+2. Connect to the board and wait for the v6 `hello` capability check and `status` reconciliation.
 3. Select exactly one activity label and tap `Start`. Android sends one atomic `record_start` command containing the label.
 4. Record the activity. Losing the BLE connection does not stop the board; after reconnect, Android requests `status` and restores the visible recording state.
 5. At 1536 KiB, or earlier to protect the storage reserve, firmware finalizes the segment and pauses sampling.
@@ -119,7 +121,7 @@ Incomplete files caused by power loss or write/finalization failure are listed a
 
 BLE is intentionally unauthenticated and unencrypted at the application-protocol level for this laboratory prototype. Any nearby client that knows the UUIDs can attempt commands. Name validation, idle-state checks, metadata matching, and Android confirmation reduce accidental deletion, but they are not access control.
 
-The v5 code can be exercised without a board as described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Current prototype measurements are recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md). Short-run timing, stale-partial recovery, and six physical 1536 KiB locked-screen pause/offload/resume cycles pass.
+The software-only path is described in [docs/testing_without_hardware.md](docs/testing_without_hardware.md). Single-device timing evidence is recorded in [docs/hardware_validation_v5.md](docs/hardware_validation_v5.md), and the first physical two-device v6 smoke test is recorded in [docs/hardware_validation_v6.md](docs/hardware_validation_v6.md).
 
 ## Android MVP App
 
@@ -127,29 +129,31 @@ The Android app is a local, Android-only MVP. It does not use accounts, cloud st
 
 Current app features:
 
-- BLE scan/connect, v5 handshake, status reconciliation, indications, notifications, and queued command writes
+- BLE scan/connect, v6 handshake, status reconciliation, indications, notifications, and queued command writes
 - a `Data` screen for selecting the recorded activity, start/stop, storage status, log catalog, and verified automatic offload
 - continuous segmented CSV offload to a user-selected Storage Access Framework folder
 - a foreground connected-device service and partial wake lock for locked-screen transfer
 - byte-count and CRC32 verification before `.part` is finalized
-- a full v5 mock device for pause/offload/resume development without the board
+- a full v6 mock device for pause/offload/resume development without the board
 - live activity, confidence, battery, session duration, steps, and calories UI
-- MET-based calorie estimate using user weight
-- phone GPS preview on the map
-- foreground location service for recording sessions while the phone is locked
-- OSMDroid map with route segments colored by activity
+- exact per-class and `unknown` duration aggregation with a frozen session weight
+- MET-based calorie estimate that excludes disconnected/stale telemetry
+- optional phone GPS; denying location does not block a Home session
+- SQLite checkpoints, interrupted-session recovery, unlimited local history, and SAF JSON/route-CSV export
+- foreground connected-device service for Home sessions while the phone is locked
+- live and historical OSMDroid maps with route segments colored by activity
 - grouped stop markers for sitting and lying
-- Settings and Debug screens
+- Home, Map, Data, History and Settings screens; diagnostics are opened from Settings
 - protocol/debug events that make request/response failures visible
 
 Current limitations:
 
 - power-loss, transfer-phase disconnect, deliberate CRC corruption, and storage-failure injection remain pending physical tests
 - BLE has no pairing, authentication, application-layer encryption, or authorization
-- firmware publishes placeholder activity, confidence, steps, and summary values
-- there is no ML model or on-device inference
-- there is no real dataset from which classification quality could be reported
-- product/demo sessions and routes are not yet a complete durable history/export feature
+- the cadence-aware Green classifier v2 has passed desktop/export/native tests and a fresh same-participant session test, but not a long-duration logger-plus-inference stress test or person-independent evaluation
+- Blue has no deployed wrist classifier or step counter; the validated Green counter over-counted slow walking by 9.0% and under-counted running by 11.0% on average
+- the current classification results are single-subject, session-grouped estimates and do not establish person-independent generalization
+- the Home history is local-only and has no cross-device synchronization or cloud backup
 
 Open the Android app in Android Studio by selecting:
 
@@ -175,7 +179,7 @@ directory instead.
 
 See [android/README.md](android/README.md) for the app architecture and [docs/testing_without_hardware.md](docs/testing_without_hardware.md) for the host and emulator checks.
 
-### v5 simulator without the board
+### v6 simulator without the board
 
 1. Open `Settings`, enable `Mock data source`, and return to `Home`.
 2. Tap `Connect mock`.
@@ -187,8 +191,11 @@ See [android/README.md](android/README.md) for the app architecture and [docs/te
 The simulator verifies Android state management and protocol handling; it does not validate the nRF52840 BLE stack, radio behavior, QSPI flash, sensor sampling, or power-loss handling.
 
 In the final system split:
-- firmware classifies activity, measures battery, tracks session duration, and later counts steps
-- Android displays activity, estimates calories, collects phone GPS, and visualizes the route
+- firmware classifies activity, measures battery, tracks session duration, and counts steps
+- Android aggregates trustworthy class times, estimates calories, optionally collects phone GPS, persists sessions, exports results, and visualizes current/historical routes
+- Python curates the dataset, trains and compares RF/SVM, exports the leg model, and evaluates effectiveness
+
+The durable Home-session contract is documented in [docs/home_sessions.md](docs/home_sessions.md).
 
 ## PlatformIO Environments
 
@@ -204,14 +211,18 @@ Formatter firmware:
 pio run -e seeed_xiao_nrf52840_sense_formatter
 ```
 
-The v5 integration also requires a host-native protocol test environment:
+The v6 integration also requires a host-native test environment:
 
 ```powershell
 $env:PATH = "C:\msys64\ucrt64\bin;$env:PATH"
 pio test -e native_protocol_tests
+pio test -e native_classifier_tests
 ```
 
-`native_protocol_tests` and at least one Android emulator smoke test are required integration gates for v5. They must not be reported as passed until their environments/tests are present and the commands complete successfully. Setup, expected coverage, and the `ActivityTracker_API_35` AVD flow are documented in [docs/testing_without_hardware.md](docs/testing_without_hardware.md).
+Both native suites and Android instrumentation smoke tests are required v6
+integration gates. They must not be reported as passed until their environments
+and tests are present and the commands exit successfully. Setup and expected
+coverage are documented in [docs/testing_without_hardware.md](docs/testing_without_hardware.md).
 
 ## Upload
 
@@ -260,7 +271,7 @@ After that, flash the normal logger firmware again.
 
 ## Serial Commands
 
-The normal firmware accepts the same newline-delimited v5 control records over
+The normal firmware accepts the same newline-delimited v6 control records over
 USB serial as it does over BLE. Choose an unsigned 32-bit request ID for each
 command:
 
@@ -279,7 +290,7 @@ File download remains BLE-only because its data is carried by the binary
 `file_data` characteristic. The console deliberately has no unguarded `erase`
 command and no separate persisted `label` command.
 
-BLE v5 dataset labels are limited to:
+BLE v6 dataset labels are limited to:
 
 - `walking`
 - `running`
@@ -299,12 +310,12 @@ record_start,13,walking
 Finalized session files use a managed label/index name, for example:
 
 ```text
-walking_0000.csv
-running_0001.csv
-sitting_0002.csv
+872f1832_walking_0.csv
+18ee26a8_running_1.csv
+872f1832_sitting_2.csv
 ```
 
-## CSV Format and Pre-Dataset Policy
+## CSV Format and Dataset Policy
 
 Use the Android `Data` workflow described above for phone-controlled recordings.
 The serial path uses the same request-ID/state coordinator for diagnostics and
@@ -321,18 +332,19 @@ Derived values such as roll, pitch, temperature, and IMU address are not stored 
 
 Battery percentage is estimated from LiPo voltage, so treat it as approximate. The value depends on load, charging state, and battery condition.
 
-No research dataset has been collected yet. Before recording data intended for ML, first complete the physical v5 validation, choose a stable mount and orientation, and define the measurement protocol. Future recordings should use:
+The admitted dataset uses simultaneous recordings from two fixed placements: the left wrist and the left lower leg. Future recordings should follow the same protocol:
 
-- same wrist
-- same board orientation
+- same body side and placement
+- same board orientation for each placement
 - same strap or mounting method
 - one activity per session
 - no transitions in the main training sessions
-- keep a PC-side session manifest with file, label, date, subject ID, duration, and notes
+- retain the generated Android sidecar and shared `paired_session_id`
+- document corrections and exclusions without rewriting raw recordings
 
 ## PC Dataset Tools
 
-These utilities prepare the future data workflow; their presence does not mean that a research dataset or ML result exists. The tracked dataset directories are placeholders, raw CSV files are ignored by Git, and any recovered local recordings must be treated as smoke-test material unless they are deliberately admitted to a documented measurement protocol.
+The final local recordings live below `dataset/raw/own/`. Raw CSV files are ignored by Git and must not be edited in place. `dataset/curation/curation.json` is the tracked source of truth for admitted corrections, recovered metadata, technical-tail exclusions, and paired cycling stop intervals.
 
 Run a read-only timing, bias, noise, clipping, drift, and stationary-sensor
 analysis across one CSV file or a directory:
@@ -353,29 +365,22 @@ Local dataset folders:
 - `dataset/processed/` generated intermediate data
 - `dataset/models/` trained model artifacts
 - `dataset/results/` metrics, plots, and reports
-- `dataset/sessions.csv` session manifest
+- `dataset/curation/` immutable curation/provenance rules
+- `dataset/processed/session_manifest.csv` generated validated manifest
 - `dataset/downloads.csv` download registry used to avoid repeated downloads
 
-Raw CSV files are ignored by git. Keep them locally in `dataset/raw/own/` and add one row per recording to `dataset/sessions.csv`:
+Prepare the dataset from the nested day/activity/device folders:
 
-```csv
-file,label,date,subject_id,duration_s,placement,orientation,source,notes
-walking_0002.csv,walking,2026-04-25,S01,180,wrist,usb_forward,own,normal pace
+```powershell
+.\.venv\Scripts\python.exe tools\prepare_ml_dataset.py
 ```
 
-Validate copied logs and the manifest:
+This validates every CSV and sidecar, verifies CRC32, applies declared corrections, excludes technical tails, mirrors cycling exclusions across paired devices, applies per-device calibration, and generates 5-second windows (260 samples) with 50% overlap. Outputs are:
 
-```bash
-python tools/validate_dataset.py
-```
-
-Add missing valid raw logs to the manifest after downloading a batch:
-
-```bash
-python tools/sync_manifest.py --orientation usb_toward_hand --notes "normal pace"
-```
-
-Use `--dry-run` first if you want to preview what would be added. The script skips invalid/empty CSV files and existing manifest entries.
+- `dataset/processed/session_manifest.csv`
+- `dataset/processed/features_wrist.csv`
+- `dataset/processed/features_leg.csv`
+- `dataset/processed/dataset_summary.json`
 
 Download and verify logs with the Android `Data` screen, then copy the finalized
 CSV files from the selected SAF folder to `dataset/raw/own/` on the PC. The app
@@ -383,9 +388,9 @@ writes `.part` files, supports resume, and exposes the final CSV only after the
 device size and CRC32 both match.
 
 `tools/download_log.py` targets the legacy pre-v3 USB `read` protocol and is not
-compatible with the current firmware. BLE v5 intentionally carries file bytes
+compatible with the current firmware. BLE v6 intentionally carries file bytes
 only through the binary `file_data` characteristic; do not use the legacy tool
-for new recordings or as evidence that a v5 transfer was verified.
+for new recordings or as evidence that a v6 transfer was verified.
 
 Load all local raw logs and print a quick summary:
 
@@ -406,25 +411,26 @@ Plots are saved to:
 dataset/results/plots/
 ```
 
-After a real, validated dataset exists, build classical feature rows from valid raw logs with:
+Train and compare both classifiers:
 
-```bash
-python tools/build_features.py
+```powershell
+.\.venv\Scripts\python.exe tools\train_classifiers.py
 ```
 
-By default this ignores the first 5 seconds and last 5 seconds of every session, then uses 2 second windows with 50% overlap. This keeps startup/shutdown handling out of the training windows. The output goes to:
+All overlapping windows from one `paired_session_id` stay in the same fold. Wrist and leg use the exact same deterministic 3-fold assignment. The command saves research models, out-of-fold predictions, metrics, confusion matrices, and comparison plots below `dataset/models/` and `dataset/results/`.
 
-```text
-dataset/processed/features.csv
-```
+Cross-validation selects the leg Random Forest as the strongest offline candidate (macro F1 `0.957`, balanced accuracy `0.962`). A later frozen-model holdout with one newly recorded session per class produced macro F1 `0.986` for wrist RF, `0.912` for wrist SVM, and `1.000` for both leg models. These are session-independent but not subject-independent results, and the small holdout does not justify a universal 100% claim. See [docs/ml_pipeline.md](docs/ml_pipeline.md) before quoting them.
 
-For tiny smoke-test files only, use a shorter window:
-
-```bash
-python tools/build_features.py --window-s 0.04 --overlap 0 --min-samples 2 --trim-start-s 0 --trim-end-s 0
-```
-
-There is currently no training/evaluation pipeline, selected classifier, exported embedded model, confusion matrix, or defensible accuracy/F1 result in this repository.
+The embedded Green classifier is a separate deployment experiment. Its v2
+candidate uses 27 features, including magnitude-domain cadence, and a
+20-tree Random Forest. It was augmented with six explicitly marked development
+sessions collected after live failures of v1. Exported float32 predictions match
+scikit-learn on all 4828 checked windows, and native C++ also reproduces feature
+extraction on raw 260-sample CSV windows. These development sessions are no
+longer an untouched test. A subsequently frozen nine-session repeat produced
+194/198 correct windows (macro F1 `0.979`) and correct majorities for 9/9
+sessions. Four slow-jog windows were still classified as `cycling`. This is
+encouraging same-participant evidence, not a person-independent result.
 
 ## Notes
 
@@ -438,18 +444,17 @@ This is required for stable USB CDC `Serial` support with this board/framework c
 
 The formatter keeps local FATFS sources in `src/fatfs/` because the one-time formatting flow depends on files that are not exposed as normal library headers.
 
-## Roadmap
+## Release and remaining research limitations
 
-Next project stages:
+The engineering release includes durable Home history and export. The final
+release archive is generated with `tools/build_release_archive.ps1`; it contains
+the Git snapshot plus ignored raw data, models, processed features, results,
+APK, firmware binaries, calibration files and a SHA-256 manifest.
 
-1. complete native/JVM/emulator verification of protocol v5
-2. validate BLE v5 and QSPI behavior on the repaired physical prototype, including locked-screen pause/offload/resume, corrected sample timing, reconnect, power loss, CRC mismatch, and guarded automatic deletion
-3. define one stable wrist mount, orientation, and measurement protocol
-4. collect and validate the first real five-class dataset
-5. build an offline training/evaluation pipeline with session-level splits
-6. select and export a model, then implement on-device inference and smoothing
-7. implement and evaluate step counting
-8. replace placeholder activity/summary telemetry and complete durable Android session export
+Future work remains person-independent evaluation, a deployed wrist model,
+bonded/authenticated BLE, destructive flash/power fault injection, and a longer
+combined logger/inference stress run. These are explicit limitations rather
+than hidden release requirements for this single-participant laboratory scope.
 
 ## License
 

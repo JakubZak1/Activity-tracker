@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "protocol_version": 6,
+  "device_identity": "7F1F9F0D872F1832",
+  "file_name": "872f1832_walking_51.csv",
+  "size_bytes": 981998,
+  "crc32": "C381413C",
+  "activity": "walking",
+  "sensor_placement": "wrist",
+  "body_side": "left",
+  "session_id": "8ee2caa8-282f-4da1-aadf-6ee9ccfff4ae",
+  "paired_session_id": "4447a511-2507-47b0-bb1a-da6bd9a9a24b",
+  "started_at_epoch_ms": 1787442229986
+}

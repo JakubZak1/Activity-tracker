@@ -6,7 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
@@ -38,7 +38,7 @@ import pl.edu.activitytracker.ui.data.DataCollectionScreen
 @RunWith(AndroidJUnit4::class)
 class DatasetSimulatorUiTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComposeTestActivity>()
 
     private val testScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -149,6 +149,10 @@ class DatasetSimulatorUiTest {
             }
         }
 
-        override fun isVerified(treeUri: String, file: RemoteFileIdentity): Boolean = file in verified
+        override fun isVerified(
+            treeUri: String,
+            deviceIdentity: String,
+            file: RemoteFileIdentity,
+        ): Boolean = file in verified
     }
 }

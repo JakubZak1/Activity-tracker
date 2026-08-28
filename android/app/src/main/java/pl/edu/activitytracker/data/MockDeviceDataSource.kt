@@ -40,6 +40,8 @@ class MockDeviceDataSource(
     private val connectDelayMillis: Long = 100L,
     private val frameDelayMillis: Long = 2L,
     private val segmentMaxSamples: Long = 27_000L,
+    private val mockTransportIdentity: String = "mock:activity-tracker-01",
+    private val mockHardwareIdentity: String = "11111111A1B2C3D4",
 ) : DeviceDataSource {
     private val simulatorLock = Any()
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
@@ -117,7 +119,7 @@ class MockDeviceDataSource(
         }
         if (!stillCurrent) return
         _connectionGeneration.value += 1L
-        _deviceIdentity.value = MOCK_DEVICE_IDENTITY
+        _deviceIdentity.value = mockTransportIdentity
         _connectionState.value = ConnectionState.Connected(Transport.Mock)
         startTelemetry()
     }
@@ -151,7 +153,16 @@ class MockDeviceDataSource(
         if (suppressResponse) emitRaw("simulator_fault", "timeout,$commandName,${command.requestId}")
         when (command) {
             is DeviceCommand.Hello -> emitControl(
-                DeviceControlResponse.Hello(command.requestId, DATASET_PROTOCOL_VERSION, REQUIRED_DATASET_CAPABILITIES),
+                DeviceControlResponse.Hello(
+                    command.requestId,
+                    DATASET_PROTOCOL_VERSION,
+                    mockHardwareIdentity,
+                    mockHardwareIdentity.takeLast(8),
+                    REQUIRED_DATASET_CAPABILITIES,
+                ),
+            )
+            is DeviceCommand.Identify -> emitControl(
+                DeviceControlResponse.Identified(command.requestId, command.color, command.durationMillis),
             )
             is DeviceCommand.Status -> emitControl(DeviceControlResponse.Status(command.requestId, currentStatus()))
             is DeviceCommand.RecordStart -> startRecording(command)
@@ -180,7 +191,7 @@ class MockDeviceDataSource(
                     DeviceControlResponse.Error(command.requestId, "already_recording")
                 }
             } else {
-                val name = "${command.activity.wireName}_${sessionIndex.toString().padStart(4, '0')}.csv"
+                val name = "${mockHardwareIdentity.takeLast(8).lowercase()}_${command.activity.wireName}_${sessionIndex.toString().padStart(4, '0')}.csv"
                 sessionIndex += 1
                 recordingLabel = command.activity
                 recordingName = name
@@ -431,6 +442,7 @@ class MockDeviceDataSource(
 
     private fun DeviceCommand.commandName(): String = when (this) {
         is DeviceCommand.Hello -> "hello"
+        is DeviceCommand.Identify -> "identify"
         is DeviceCommand.Status -> "status"
         is DeviceCommand.RecordStart -> "record_start"
         is DeviceCommand.RecordStop -> "record_stop"
@@ -470,7 +482,6 @@ class MockDeviceDataSource(
     }
 
     companion object {
-        private const val MOCK_DEVICE_IDENTITY = "mock:activity-tracker-v3"
         private const val MOCK_FREE_BYTES = 1_800_000L
         private const val MOCK_FRAME_DATA_BYTES = 12
         private const val RECORDING_SAMPLE_INTERVAL_MS = 20L

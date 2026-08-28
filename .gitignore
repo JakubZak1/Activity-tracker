@@ -14,6 +14,9 @@ dataset/raw/**/*.part
 dataset/processed/*
 dataset/models/*
 dataset/results/*
+dataset/test/
+dataset/dataset_raw_own_backup/
+dataset/raw_backup_*/
 !dataset/sessions.csv
 !dataset/downloads.csv
 !dataset/raw/**/.gitkeep
@@ -36,3 +39,6 @@ android/**/.externalNativeBuild/
 *.iml
 *.jks
 *.keystore
+
+# Generated thesis release bundle (contains ignored datasets and binaries)
+release/

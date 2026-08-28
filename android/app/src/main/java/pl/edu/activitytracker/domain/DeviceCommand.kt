@@ -12,6 +12,14 @@ sealed interface DeviceCommand {
         override val line = "status,$requestId"
     }
 
+    data class Identify(
+        override val requestId: Long,
+        val color: DeviceLedColor,
+        val durationMillis: Long = 5_000L,
+    ) : DeviceCommand {
+        override val line = "identify,$requestId,${color.wireName},$durationMillis"
+    }
+
     data class RecordStart(
         override val requestId: Long,
         val activity: ActivityType,

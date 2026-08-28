@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build fixed-window features from Activity Tracker raw CSV logs."""
+"""Legacy flat-directory feature experiment.
+
+Use ``prepare_ml_dataset.py`` for the research dataset: it adds recursive
+discovery, provenance-aware curation, paired exclusions and device calibration.
+This module remains only for tiny synthetic/smoke-test CSV files.
+"""
 
 from __future__ import annotations
 
@@ -26,8 +31,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert raw IMU CSV logs into window-level feature rows.")
     parser.add_argument("--raw-dir", default="dataset/raw/own", type=Path)
     parser.add_argument("--output", default="dataset/processed/features.csv", type=Path)
-    parser.add_argument("--sample-rate-hz", default=50.0, type=float)
-    parser.add_argument("--window-s", default=2.0, type=float)
+    parser.add_argument("--sample-rate-hz", default=52.0, type=float)
+    parser.add_argument("--window-s", default=5.0, type=float)
     parser.add_argument("--overlap", default=0.5, type=float)
     parser.add_argument("--trim-start-s", default=5.0, type=float, help="Seconds ignored at the start of each session.")
     parser.add_argument("--trim-end-s", default=5.0, type=float, help="Seconds ignored at the end of each session.")

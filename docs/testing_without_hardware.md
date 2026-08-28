@@ -1,6 +1,9 @@
-# Testing BLE v5 without the physical prototype
+# Testing BLE v6 without the physical prototype
 
-This guide defines the software-only verification path for Activity Tracker BLE dataset protocol v5. It covers host-testable firmware logic, Android JVM tests, APK assembly, an Android emulator smoke test, and the in-app segmented-recording simulator.
+This guide defines the software-only verification path for Activity Tracker BLE
+dataset protocol v6. It covers host-testable firmware and classifier logic,
+Python pipeline tests, Android JVM tests, APK assembly, Android instrumentation
+tests, and the in-app segmented-recording simulator.
 
 Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, battery circuit, power-loss behavior, or real BLE throughput. Those remain hardware acceptance tests.
 
@@ -10,13 +13,18 @@ Passing these checks does **not** verify the nRF52840 radio, QSPI flash, IMU, ba
 | --- | --- | --- |
 | Main firmware cross-build | `pio run -e seeed_xiao_nrf52840_sense` | No |
 | Formatter cross-build | `pio run -e seeed_xiao_nrf52840_sense_formatter` | No |
-| Pure v5 firmware modules | `pio test -e native_protocol_tests` | No |
+| Pure v6 firmware modules | `pio test -e native_protocol_tests` | No |
+| Classifier and step counter | `pio test -e native_classifier_tests` | No |
+| Python pipeline | `.\.venv\Scripts\python.exe -m unittest discover -s tools\tests -v` | No |
 | Android JVM tests and APK | `.\gradlew.bat testDebugUnitTest assembleDebug` | No |
 | Android instrumentation smoke | `.\gradlew.bat connectedDebugAndroidTest` on `ActivityTracker_API_35` | No |
-| Android v5 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
+| Android v6 simulator workflow | `Settings -> Mock data source -> Connect mock -> Data` | No |
 | BLE/QSPI/power acceptance | physical test matrix | Yes |
 
-`native_protocol_tests` and at least one instrumentation smoke test are required v5 integration gates. If the PlatformIO environment or `androidTest` source set is absent, that is missing test coverage, not a passing result. Do not report a command as passed until it exists and exits successfully.
+Both native suites, the Python suite, and at least one instrumentation smoke
+test are required v6 integration gates. If an environment or test source set is
+absent, that is missing coverage, not a passing result. Do not report a command
+as passed until it exists and exits successfully.
 
 ## 1. PowerShell and MSYS2 setup
 
@@ -65,12 +73,13 @@ Then run the host-native suite:
 
 ```powershell
 pio test -e native_protocol_tests
+pio test -e native_classifier_tests
 ```
 
 The native suite should exercise code that has no Arduino/BLE/flash dependency, including:
 
 - IEEE CRC-32, including the standard `123456789 -> CBF43926` vector and incremental updates;
-- v5 command parsing, exact request-ID propagation, label/name/range validation, segmentation boundary, pause/resume transitions, and fragmented newline-delimited control input;
+- v6 command parsing, exact request-ID propagation, label/name/range validation, segmentation boundary, pause/resume transitions, and fragmented newline-delimited control input;
 - the recording state machine: idle/start, idempotent same-label start, conflicting start, stop replay, and recording preserved across disconnect;
 - contiguous file-frame decisions for accept, full duplicate, gap, overlap, and overflow;
 - guarded delete metadata checks.
@@ -89,13 +98,16 @@ Pop-Location
 
 The JVM suite should cover at least:
 
-- fragmented v5 control records and request-ID correlation;
+- fragmented v6 control records and request-ID correlation;
 - command timeout and reconciliation behavior;
 - file-frame duplicate/gap/overlap/overflow handling;
 - resume metadata compatibility;
 - byte-count and CRC32 success/failure paths;
 - repository/controller behavior for start, stop, disconnect, reconnect, continuous segmented offload, CRC gating, and automatic guarded deletion;
 - existing payload and calorie calculations.
+- exact six-bucket Home timing, stale/disconnected unknown time, frozen session
+  mass, Green address selection, final Stop tick and optional GPS behavior;
+- SQLite checkpoint/recovery/delete and JSON/header-only route CSV contracts.
 
 The debug APK is generated under `android/app/build/outputs/apk/debug/`. A successful compile alone is not a BLE or emulator result.
 
@@ -139,15 +151,23 @@ Before running the gate, verify that instrumentation tests exist; Gradle must no
 ```powershell
 Push-Location android
 if (-not (Test-Path '.\app\src\androidTest')) {
-    throw 'Missing androidTest smoke coverage for BLE v5'
+    throw 'Missing androidTest smoke coverage for BLE v6'
 }
 .\gradlew.bat connectedDebugAndroidTest --console=plain
 Pop-Location
 ```
 
-At minimum, the smoke test should launch `MainActivity`, navigate with the mock source enabled, and prove that the `Data` workflow can reach its recording and completed-download states without crashing.
+The debug build supplies `ComposeTestActivity`, a test-only host with
+`showWhenLocked` and `turnScreenOn`. This prevents a device keyguard from
+pausing the Compose host and producing a false "No compose hierarchies" error.
+It is excluded from release builds and does not replace a real foreground BLE
+screen-lock acceptance test.
 
-## 6. Manual v5 simulator scenario
+At minimum, the suite must prove the one-device and paired-device simulator
+flows, SQLite checkpoint/interrupted recovery, export serialization, and the
+History/detail/no-GPS workflow. A Gradle `NO-SOURCE` result is not a pass.
+
+## 6. Manual v6 simulator scenario
 
 Install and launch the debug app on the running AVD:
 

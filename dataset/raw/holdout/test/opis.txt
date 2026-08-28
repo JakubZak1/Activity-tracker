@@ -1,0 +1,6 @@
+walking_60 - wolny chód prosto
+walking_61 - normalny chód prosto
+walking_62 - kółka w lewo
+walking_64 - kółka w prawo
+running_65 - wolny bieg prosto
+running_66 - normalny bieg prosto, zawrót, i znów normalny bieg

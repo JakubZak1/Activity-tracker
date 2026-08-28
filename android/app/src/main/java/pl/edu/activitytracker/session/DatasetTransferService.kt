@@ -34,7 +34,7 @@ class DatasetTransferService : Service() {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
             )
             acquireWakeLock()
-            (application as ActivityTrackerApplication).appContainer.repository.connect()
+            (application as ActivityTrackerApplication).appContainer.multiDatasetManager.restoreConnections()
         } catch (_: RuntimeException) {
             stopSelf()
         }

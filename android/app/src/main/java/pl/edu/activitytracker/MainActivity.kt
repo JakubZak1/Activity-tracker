@@ -19,6 +19,7 @@ class MainActivity : ComponentActivity() {
                 factory = MainViewModel.Factory(
                     repository = appContainer.repository,
                     settingsStore = appContainer.settingsStore,
+                    multiDatasetManager = appContainer.multiDatasetManager,
                 ),
             )
 

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "protocol_version": 6,
+  "device_identity": "7F1F9F0D872F1832",
+  "file_name": "872f1832_cycling_30.csv",
+  "size_bytes": 1176975,
+  "crc32": "72191111",
+  "activity": "cycling",
+  "sensor_placement": "wrist",
+  "body_side": "left",
+  "session_id": "993b9297-3b54-46fe-b65b-f4e11d307d9e",
+  "paired_session_id": "35146bd6-5791-4d28-b31c-7dec8507c4e4",
+  "started_at_epoch_ms": 1787338915758
+}

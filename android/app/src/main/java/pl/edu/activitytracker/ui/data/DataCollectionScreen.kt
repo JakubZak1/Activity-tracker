@@ -153,7 +153,7 @@ fun DataCollectionScreen(
                 Text("Dataset collection", style = MaterialTheme.typography.headlineSmall)
                 Text(
                     if (useMockSource) {
-                        "Interactive protocol v5 pause/offload/resume simulator"
+                        "Interactive protocol v6 pause/offload/resume simulator"
                     } else {
                         "Continuous recording with verified automatic phone offload"
                     },
@@ -436,8 +436,8 @@ private fun DatasetConnectionState.label(): String = when (this) {
     DatasetConnectionState.Offline -> "Disconnected"
     DatasetConnectionState.Connecting -> "Scanning or connecting..."
     DatasetConnectionState.Handshaking -> "Connected; checking protocol..."
-    DatasetConnectionState.Synchronizing -> "Protocol v5; synchronizing..."
-    is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)\nDevice: $deviceIdentity"
+    DatasetConnectionState.Synchronizing -> "Protocol v6; synchronizing..."
+    is DatasetConnectionState.Ready -> "Ready (protocol $protocolVersion)\nDevice: $shortId"
     is DatasetConnectionState.Incompatible -> "Incompatible: $message"
     is DatasetConnectionState.Error -> "Error: $message"
 }

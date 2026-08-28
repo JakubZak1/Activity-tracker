@@ -43,7 +43,10 @@ class SessionRecordingService : Service() {
     }
 
     private fun foregroundServiceTypes(): Int {
-        var types = ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        var types = 0
+        if (AppPermissions.hasLocationPermission(this)) {
+            types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        }
         if (AppPermissions.bluetoothPermissionsToRequest(this).isEmpty()) {
             types = types or ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         }
@@ -64,7 +67,7 @@ class SessionRecordingService : Service() {
         NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Recording session")
-            .setContentText("Activity Tracker is recording GPS for this session.")
+            .setContentText("Activity Tracker is recording a device session.")
             .setContentIntent(openAppPendingIntent())
             .setOngoing(true)
             .setOnlyAlertOnce(true)
