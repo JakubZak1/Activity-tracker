@@ -1,0 +1,5 @@
+placement,model,accuracy,balanced_accuracy,macro_f1,model_size_bytes
+wrist,random_forest,0.854906,0.866324,0.854514,455256
+wrist,svm_rbf,0.870336,0.877491,0.874439,507567
+leg,random_forest,0.957261,0.962222,0.957276,142755
+leg,svm_rbf,0.940947,0.946159,0.939034,163869

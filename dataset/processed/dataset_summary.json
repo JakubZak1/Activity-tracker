@@ -1,0 +1,58 @@
+{
+  "configuration": {
+    "sample_rate_hz": 52.0,
+    "window_s": 5.0,
+    "overlap": 0.5,
+    "trim_start_s": 5.0,
+    "trim_end_s": 5.0,
+    "calibration": "per-device six-position profiles"
+  },
+  "files": {
+    "total": 82,
+    "included": 73,
+    "excluded": 9
+  },
+  "window_counters": {
+    "included_files": 73,
+    "excluded_files": 9,
+    "windows": 8694,
+    "curated_windows": 170
+  },
+  "placements": {
+    "wrist": {
+      "windows": 4342,
+      "windows_by_label": {
+        "cycling": 726,
+        "lying": 964,
+        "running": 783,
+        "sitting": 847,
+        "walking": 1022
+      },
+      "paired_sessions_by_label": {
+        "cycling": 3,
+        "lying": 8,
+        "running": 8,
+        "sitting": 7,
+        "walking": 7
+      }
+    },
+    "leg": {
+      "windows": 4352,
+      "windows_by_label": {
+        "cycling": 718,
+        "lying": 966,
+        "running": 781,
+        "sitting": 851,
+        "walking": 1036
+      },
+      "paired_sessions_by_label": {
+        "cycling": 3,
+        "lying": 8,
+        "running": 8,
+        "sitting": 7,
+        "walking": 7
+      }
+    }
+  },
+  "feature_count": 98
+}
