@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "evaluation_type": "frozen_model_on_fresh_session_holdout",
+  "warning": "Windows overlap by 50%; nine complete sessions from one participant are the independent experimental units.",
+  "model": {
+    "path": "dataset/models/leg_random_forest_embedded_v2.joblib",
+    "sha256": "b74de68033513119590f2b1370bd3b88834ba8f985ba72ad340d74aa79678133",
+    "purpose": "embedded_leg_random_forest_augmented_v2",
+    "features": 27,
+    "trees": 20
+  },
+  "features_sha256": "fcc9a893d7306babb6713d36e229d78105ea6bc3f4364ca489941081e917384a",
+  "raw_sha256": {
+    "18ee26a8_cycling_75.csv": "49e765160b146e4311194d64f7832a5360f940eeeaf8d194a5c3ea2e2a0c6dc9",
+    "18ee26a8_lying_68.csv": "ec7f016fcb52823dbb320ea1cd5f450aa84b088cbf8b5aa328c92300b9184054",
+    "18ee26a8_running_73.csv": "f9626a2896c3ab229362b953b2c8f11a62a1f6b8881d04902970df3cfd8a1aaa",
+    "18ee26a8_running_74.csv": "9b9320bccb2160bd2576c2d53e60ce580c686695b626bc3dcf4032422af64b35",
+    "18ee26a8_sitting_67.csv": "50299ec04c70ca756fe0400131c888aa8a8391cfc7bed5706fb72cc2fb7d3de9",
+    "18ee26a8_walking_69.csv": "f4b6c80e4e27ef1dcff33e30c82cdc0b2a8e7ff5800daf089a20698ed0f82b6a",
+    "18ee26a8_walking_70.csv": "0a28c5c7c4590f5c1894ebb51b1b3bfba52745867000c92381802713d58a1f90",
+    "18ee26a8_walking_71.csv": "3fc4b7050a0993bf4a1708169158fe48e0ea1916d678867c13369e90a080851f",
+    "18ee26a8_walking_72.csv": "a8c83fa86670fdcf0e80dbfc662a24da6390aec55be4c41761cdc0bec77295b0"
+  },
+  "raw_window_metrics": {
+    "windows": 198,
+    "accuracy": 0.9797979797979798,
+    "balanced_accuracy": 0.9800000000000001,
+    "macro_f1": 0.979217273954116,
+    "confusion_matrix_labels": [
+      "walking",
+      "running",
+      "cycling",
+      "sitting",
+      "lying"
+    ],
+    "confusion_matrix": [
+      [
+        79,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        36,
+        4,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        37,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        22,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        20
+      ]
+    ]
+  },
+  "smoothed_window_metrics": {
+    "windows": 198,
+    "accuracy": 0.9949494949494949,
+    "balanced_accuracy": 0.9949999999999999,
+    "macro_f1": 0.994801687763713,
+    "confusion_matrix_labels": [
+      "walking",
+      "running",
+      "cycling",
+      "sitting",
+      "lying"
+    ],
+    "confusion_matrix": [
+      [
+        79,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        39,
+        1,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        37,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        22,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        20
+      ]
+    ]
+  },
+  "session_majority": {
+    "correct": 9,
+    "total": 9,
+    "sessions": [
+      {
+        "file": "18ee26a8_cycling_75.csv",
+        "maneuver": "outdoor cycling with phone stored and stationary start/stop",
+        "actual": "cycling",
+        "windows": 37,
+        "prediction_counts": {
+          "cycling": 37
+        },
+        "majority_prediction": "cycling",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "cycling": 37
+        },
+        "mean_confidence": 0.9944513219587297
+      },
+      {
+        "file": "18ee26a8_lying_68.csv",
+        "maneuver": "lying on back with small movements",
+        "actual": "lying",
+        "windows": 20,
+        "prediction_counts": {
+          "lying": 20
+        },
+        "majority_prediction": "lying",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "lying": 20
+        },
+        "mean_confidence": 0.7310123279539704
+      },
+      {
+        "file": "18ee26a8_running_73.csv",
+        "maneuver": "deliberately slow jog on the corridor route",
+        "actual": "running",
+        "windows": 20,
+        "prediction_counts": {
+          "running": 16,
+          "cycling": 4
+        },
+        "majority_prediction": "running",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "running": 19,
+          "cycling": 1
+        },
+        "mean_confidence": 0.49744534060718915
+      },
+      {
+        "file": "18ee26a8_running_74.csv",
+        "maneuver": "normal comfortable run on the same route",
+        "actual": "running",
+        "windows": 20,
+        "prediction_counts": {
+          "running": 20
+        },
+        "majority_prediction": "running",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "running": 20
+        },
+        "mean_confidence": 0.8185214685645775
+      },
+      {
+        "file": "18ee26a8_sitting_67.csv",
+        "maneuver": "natural sitting with small movements",
+        "actual": "sitting",
+        "windows": 22,
+        "prediction_counts": {
+          "sitting": 22
+        },
+        "majority_prediction": "sitting",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "sitting": 22
+        },
+        "mean_confidence": 0.9999804131261637
+      },
+      {
+        "file": "18ee26a8_walking_69.csv",
+        "maneuver": "deliberately slow walking on a straight corridor route",
+        "actual": "walking",
+        "windows": 20,
+        "prediction_counts": {
+          "walking": 20
+        },
+        "majority_prediction": "walking",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "walking": 20
+        },
+        "mean_confidence": 0.9892146362255098
+      },
+      {
+        "file": "18ee26a8_walking_70.csv",
+        "maneuver": "normal-pace walking on the same corridor route",
+        "actual": "walking",
+        "windows": 20,
+        "prediction_counts": {
+          "walking": 20
+        },
+        "majority_prediction": "walking",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "walking": 20
+        },
+        "mean_confidence": 0.5902300755984906
+      },
+      {
+        "file": "18ee26a8_walking_71.csv",
+        "maneuver": "normal-pace continuous left-hand circles",
+        "actual": "walking",
+        "windows": 20,
+        "prediction_counts": {
+          "walking": 20
+        },
+        "majority_prediction": "walking",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "walking": 20
+        },
+        "mean_confidence": 0.85662288797806
+      },
+      {
+        "file": "18ee26a8_walking_72.csv",
+        "maneuver": "normal-pace continuous right-hand circles",
+        "actual": "walking",
+        "windows": 19,
+        "prediction_counts": {
+          "walking": 19
+        },
+        "majority_prediction": "walking",
+        "majority_correct": true,
+        "smoothed_counts": {
+          "walking": 19
+        },
+        "mean_confidence": 0.9684085191168907
+      }
+    ]
+  }
+}
